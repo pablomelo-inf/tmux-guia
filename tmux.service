@@ -1,0 +1,14 @@
+# Serviço de usuário: sobe o tmux no login, e o tmux-continuum restaura as sessões salvas.
+# Ao desligar, salva antes de encerrar. Instalar: "tm boot".
+[Unit]
+Description=tmux server (sessões restauradas pelo tmux-continuum)
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/tmux new-session -d
+ExecStop=%h/.tmux/plugins/tmux-resurrect/scripts/save.sh
+ExecStop=/usr/bin/tmux kill-server
+RestartSec=2
+
+[Install]
+WantedBy=default.target
