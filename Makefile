@@ -87,7 +87,11 @@ alias: ## Adiciona o alias "tm" ao ~/.bashrc, se ainda não existir
 plugins: ## Instala o TPM e os plugins (resurrect, continuum) do tmux.conf
 	$(check)
 	@test -d $$HOME/.tmux/plugins/tpm || git clone -q https://github.com/tmux-plugins/tpm $$HOME/.tmux/plugins/tpm
-	@$$HOME/.tmux/plugins/tpm/bin/install_plugins
+	@# O TPM lê o caminho dos plugins do servidor tmux: garante um servidor e recarrega a config.
+	@started=0; tmux has-session 2>/dev/null || { tmux new-session -d -s _tpm && started=1; }; \
+	  tmux source-file $$HOME/.tmux.conf; \
+	  $$HOME/.tmux/plugins/tpm/bin/install_plugins; rc=$$?; \
+	  if [ $$started = 1 ]; then tmux kill-session -t _tpm; fi; exit $$rc
 	@echo "Plugins instalados. Em sessões abertas: tmux source ~/.tmux.conf"
 
 boot: ## Sobe o tmux no login (restaura as sessões salvas e salva ao desligar)
