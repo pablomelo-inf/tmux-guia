@@ -1,14 +1,12 @@
 # User service: starts tmux at login, and tmux-continuum restores the saved sessions.
-# On shutdown it saves first, then exits. Install with: "tm boot".
+# On stop it saves first; systemd then ends the server. Install with: "tm boot".
 [Unit]
-Description=tmux server (sessões restauradas pelo tmux-continuum)
+Description=tmux server (sessions restored by tmux-continuum)
 
 [Service]
 Type=forking
 ExecStart=/usr/bin/tmux new-session -d
 ExecStop=%h/.tmux/plugins/tmux-resurrect/scripts/save.sh
-ExecStop=/usr/bin/tmux kill-server
-RestartSec=2
 
 [Install]
 WantedBy=default.target
