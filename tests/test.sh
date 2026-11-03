@@ -74,6 +74,18 @@ tm alias >/dev/null 2>&1; tm alias >/dev/null 2>&1
 [ "$(grep -c '^alias tm=' "$HOME/.bashrc")" = 1 ] && ok "alias added once" || fail "alias duplicated or missing"
 grep -qF -- "-C \"$REPO\"" "$HOME/.bashrc" && ok "alias quotes the repo path" || fail "alias path not quoted"
 
+# --- boot installs a copy of the unit (not a link), refreshed on every run --
+# systemctl/loginctl are stubbed: CI has no user systemd, and we only check what lands on disk.
+mkdir -p "$WORK/bin" "$HOME/.tmux/plugins/tmux-resurrect"
+printf '#!/bin/sh\nexit 0\n' | tee "$WORK/bin/systemctl" > "$WORK/bin/loginctl"
+chmod +x "$WORK/bin/systemctl" "$WORK/bin/loginctl"
+unit="$HOME/.config/systemd/user/tmux.service"
+mkdir -p "$(dirname "$unit")" && ln -s "$REPO/tmux.service" "$unit"   # an old install: a link to the repo
+PATH="$WORK/bin:$PATH" tm boot >/dev/null 2>&1
+{ [ -f "$unit" ] && [ ! -L "$unit" ] && cmp -s "$unit" "$REPO/tmux.service"; } \
+  && ok "boot: unit is a copy of the repo file" || fail "boot: unit is not a plain copy"
+rm -rf "$HOME/.tmux"
+
 # --- tmux.conf keeps the setting that prevents the boot hang ----------------
 grep -q "^set -g @continuum-boot 'on'" "$REPO/tmux.conf" \
   && ok "tmux.conf sets @continuum-boot on" || fail "tmux.conf lost @continuum-boot on"

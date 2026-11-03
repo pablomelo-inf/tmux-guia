@@ -119,8 +119,14 @@ plugins: ## Instala o TPM e os plugins (resurrect, continuum) do tmux.conf
 boot: ## Sobe o tmux no login (restaura as sessões salvas e salva ao desligar)
 	$(check)
 	@test -d $$HOME/.tmux/plugins/tmux-resurrect || { echo "Rode antes: tm plugins"; exit 1; }
-	@systemctl --user enable $(DIR)/tmux.service
+	@# A copy, not a link: the service keeps working if this repo is moved or deleted. Re-run to update it.
+	@unit=$$HOME/.config/systemd/user/tmux.service; \
+	  mkdir -p "$$(dirname "$$unit")" && rm -f "$$unit" && install -m 644 "$(DIR)/tmux.service" "$$unit" \
+	  && systemctl --user daemon-reload && systemctl --user reenable tmux.service
 	@echo "Ativo no próximo login. Para subir agora: systemctl --user start tmux"
+	@# Without linger, systemd stops the user's services when the last session ends.
+	@loginctl show-user "$$USER" -p Linger 2>/dev/null | grep -q yes \
+	  || echo "Dica: para o tmux sobreviver ao último logout (ex.: queda de SSH), rode: loginctl enable-linger"
 	@echo "Sessões em aberto:"
 	@$(MAKE) --no-print-directory ls
 
