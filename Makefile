@@ -94,6 +94,8 @@ alias: ## Adiciona o alias "tm" ao ~/.bashrc, se ainda não existir
 plugins: ## Instala o TPM e os plugins (resurrect, continuum) do tmux.conf
 	$(check)
 	@test -d $$HOME/.tmux/plugins/tpm || git clone -q https://github.com/tmux-plugins/tpm $$HOME/.tmux/plugins/tpm
+	@# TPM runs on the next step, so pin it first: nothing from GitHub HEAD gets executed.
+	@git -C $$HOME/.tmux/plugins/tpm checkout -q $(TPM_SHA)
 	@# TPM reads the plugin path from the tmux server: make sure one is running and reload the config.
 	@started=0; tmux has-session 2>/dev/null || { tmux new-session -d -s _tpm && started=1; }; \
 	  tmux source-file $$HOME/.tmux.conf; \

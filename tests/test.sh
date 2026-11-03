@@ -27,6 +27,12 @@ for t in ls attach create detach rename kill clean kill-all install conf alias p
   check "dry run: $t" tm -n "$t" S=x N=y
 done
 
+# TPM must be pinned before anything executes it (source-file loads it).
+pin_line=$(tm -n plugins | grep -n 'tpm checkout' | head -1 | cut -d: -f1)
+run_line=$(tm -n plugins | grep -n 'source-file' | head -1 | cut -d: -f1)
+[ -n "$pin_line" ] && [ -n "$run_line" ] && [ "$pin_line" -lt "$run_line" ] \
+  && ok "plugins: TPM is pinned before it runs" || fail "plugins: TPM runs before being pinned"
+
 # --- session names are data, never commands ---------------------------------
 tm create S="a b;touch $WORK/pwned" >/dev/null 2>&1
 [ ! -e "$WORK/pwned" ] && ok "create: ; in name is not executed" || fail "create: ; in name was executed"
