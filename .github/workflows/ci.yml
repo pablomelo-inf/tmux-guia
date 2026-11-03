@@ -11,10 +11,14 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: shellcheck
         run: |
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck tests/test.sh
       - name: Makefile parses
@@ -22,9 +26,14 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install tmux
-        run: sudo apt-get install -y --no-install-recommends tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
       - name: Tests (including plugin install and pinned commits)
         run: RUN_NETWORK=1 tests/test.sh
