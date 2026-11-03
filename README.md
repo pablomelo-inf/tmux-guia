@@ -41,6 +41,8 @@ tmux itself dies on shutdown, so this repo saves and rebuilds the environment in
 - `tm boot` installs a systemd user service: tmux starts at login (restoring the last save) and saves again on a clean shutdown.
 - `claude` panes are relaunched as `claude --continue` (see `@resurrect-processes` in `tmux.conf`). This is untested: if it doesn't match, adjust that line.
 - **Not restored:** running processes (`npm run dev`, `docker compose logs`, ...). You get the pane in the right directory; restart the command, or add it to `@resurrect-processes`.
+- **Privacy:** `@resurrect-capture-pane-contents` saves pane text (anything shown on screen, secrets included) in plain text under `~/.local/share/tmux/resurrect`. `tm plugins` makes that folder owner-only (`700`). Remove that line from `tmux.conf` if you don't want it.
+- **Plugins are pinned** to audited commits in the `Makefile` (they run code on every tmux start). To update: review the diff upstream, then change the `*_SHA` lines.
 - Manual save/restore: `Ctrl+b` `Ctrl+s` / `Ctrl+b` `Ctrl+r`.
 - Name windows with `Ctrl+b` `,` — the names survive the restore.
 

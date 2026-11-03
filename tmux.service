@@ -1,5 +1,5 @@
-# Serviço de usuário: sobe o tmux no login, e o tmux-continuum restaura as sessões salvas.
-# Ao desligar, salva antes de encerrar. Instalar: "tm boot".
+# User service: starts tmux at login, and tmux-continuum restores the saved sessions.
+# On shutdown it saves first, then exits. Install with: "tm boot".
 [Unit]
 Description=tmux server (sessões restauradas pelo tmux-continuum)
 
