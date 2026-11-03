@@ -70,6 +70,19 @@ tm conf >/dev/null 2>&1
 tm conf >/dev/null 2>&1
 [ ! -e "$HOME/.tmux.conf.bak" ] && ok "conf is idempotent (no .bak)" || fail "conf made a .bak on 2nd run"
 
+# An older backup is never overwritten.
+rm "$HOME/.tmux.conf"; echo mine > "$HOME/.tmux.conf"; echo old-backup > "$HOME/.tmux.conf.bak"
+tm conf >/dev/null 2>&1
+{ [ "$(cat "$HOME/.tmux.conf.bak")" = old-backup ] && [ "$(cat "$HOME"/.tmux.conf.bak.* 2>/dev/null)" = mine ]; } \
+  && ok "conf: keeps the older .bak, saves the new one aside" || fail "conf: overwrote an older .bak"
+
+# kill-all asks first
+tm create S=keep >/dev/null 2>&1
+echo n | tm kill-all >/dev/null 2>&1
+tmux has-session -t keep 2>/dev/null && ok "kill-all: 'n' keeps everything" || fail "kill-all: killed without confirmation"
+echo y | tm kill-all >/dev/null 2>&1
+tmux has-session -t keep 2>/dev/null && fail "kill-all: 'y' did not kill" || ok "kill-all: 'y' kills everything"
+
 tm alias >/dev/null 2>&1; tm alias >/dev/null 2>&1
 [ "$(grep -c '^alias tm=' "$HOME/.bashrc")" = 1 ] && ok "alias added once" || fail "alias duplicated or missing"
 grep -qF -- "-C \"$REPO\"" "$HOME/.bashrc" && ok "alias quotes the repo path" || fail "alias path not quoted"

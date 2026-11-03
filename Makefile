@@ -34,71 +34,72 @@ endif
 B := $(shell tput bold 2>/dev/null)
 R := $(shell tput sgr0 2>/dev/null)
 
-check = @command -v tmux >/dev/null || { echo "tmux não está instalado. Rode: make install"; exit 1; }
-need = @test -n "$$NAME" || { echo "Informe a sessão. Ex.: tm $@ nome"; echo "Sessões existentes:"; $(MAKE) --no-print-directory ls; exit 1; }
+check = @command -v tmux >/dev/null || { echo "tmux is not installed. Run: make install"; exit 1; }
+need = @test -n "$$NAME" || { echo "Give a session name. E.g.: tm $@ name"; echo "Existing sessions:"; $(MAKE) --no-print-directory ls; exit 1; }
 
-help: ## Mostra esta ajuda
+help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / { printf "  $(B)%-9s$(R) %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-	@echo "Exemplo: tm attach casa"
-	@echo "Para sair do tmux sem encerrar a sessão: Ctrl+b, soltar, d (nunca 'exit')."
+	@echo "Example: tm attach home"
+	@echo "To leave tmux without ending the session: Ctrl+b, release, d (never 'exit')."
 
-ls: ## Lista as sessões e diz se estão em uso
+ls: ## List sessions and whether they are in use
 	$(check)
-	@tmux ls -F '  #{session_name}: #{session_windows} janela(s), #{?session_attached,em uso,livre}' 2>/dev/null \
-	  || echo "Nenhuma sessão rodando."
+	@tmux ls -F '  #{session_name}: #{session_windows} window(s), #{?session_attached,in use,free}' 2>/dev/null \
+	  || echo "No sessions running."
 
-attach: ## Entra na sessão: tm attach NOME (cria se não existir)
+attach: ## Attach to a session, creating it if missing: tm attach NAME
 	$(check)
 	$(need)
 	@tmux new-session -A -s "$$NAME"
 
-create: ## Cria a sessão sem entrar: tm create NOME
+create: ## Create a session without attaching: tm create NAME
 	$(check)
 	$(need)
-	@tmux new-session -d -s "$$NAME" && echo "Sessão '$$NAME' criada. Para entrar: tm attach $$NAME"
+	@tmux new-session -d -s "$$NAME" && echo "Session '$$NAME' created. To attach: tm attach $$NAME"
 
-detach: ## Desconecta quem está na sessão, mantendo ela rodando: tm detach NOME
+detach: ## Detach clients, keep the session running: tm detach NAME
 	$(check)
 	$(need)
-	@tmux detach-client -s "$$NAME" && echo "Sessão '$$NAME' desconectada, continua rodando."
+	@tmux detach-client -s "$$NAME" && echo "Session '$$NAME' detached, still running."
 
-rename: ## Renomeia a sessão: tm rename ANTIGO NOVO
+rename: ## Rename a session: tm rename OLD NEW
 	$(check)
 	$(need)
-	@test -n "$$NOVO" || { echo "Faltou o novo nome. Ex.: tm rename $$NAME outro"; exit 1; }
-	@tmux rename-session -t "$$NAME" "$$NOVO" && echo "'$$NAME' agora se chama '$$NOVO'."
+	@test -n "$$NOVO" || { echo "Missing the new name. E.g.: tm rename $$NAME other"; exit 1; }
+	@tmux rename-session -t "$$NAME" "$$NOVO" && echo "'$$NAME' is now called '$$NOVO'."
 
-kill: ## Encerra a sessão (o que rodava nela é perdido): tm kill NOME
+kill: ## Kill a session (whatever ran in it is lost): tm kill NAME
 	$(check)
 	$(need)
-	@tmux kill-session -t "$$NAME" && echo "Sessão '$$NAME' encerrada."
+	@tmux kill-session -t "$$NAME" && echo "Session '$$NAME' killed."
 
-clean: ## Encerra todas as sessões livres; mantém as em uso
+clean: ## Kill all free sessions; keep the ones in use
 	$(check)
 	@n=0; for s in $$(tmux ls -F '#{session_name} #{session_attached}' 2>/dev/null | awk '$$2==0 {print $$1}'); do \
-	  tmux kill-session -t "$$s" && echo "encerrada: $$s" && n=$$((n+1)); \
-	done; echo "$$n sessão(ões) encerrada(s)."
+	  tmux kill-session -t "$$s" && echo "killed: $$s" && n=$$((n+1)); \
+	done; echo "$$n session(s) killed."
 
-kill-all: ## Encerra todas as sessões, inclusive as em uso (pede confirmação)
+kill-all: ## Kill every session, even those in use (asks first)
 	$(check)
-	@read -p "Encerrar TODAS as sessões? [s/N] " r; \
-	  if [ "$$r" = "s" ]; then tmux kill-server && echo "Tudo encerrado."; else echo "Cancelado."; fi
+	@read -p "Kill ALL sessions? [y/N] " r; \
+	  if [ "$$r" = "y" ]; then tmux kill-server && echo "Everything killed."; else echo "Cancelled."; fi
 
-install: ## Instala o tmux
+install: ## Install tmux
 	sudo apt install -y tmux
 
-conf: ## Linka o tmux.conf deste repo em ~/.tmux.conf (faz backup do existente)
+conf: ## Link this repo's tmux.conf to ~/.tmux.conf (backs up an existing one)
 	@dst=$$HOME/.tmux.conf; \
-	if [ "$$(readlink -f $$dst)" = "$(DIR)/tmux.conf" ]; then echo "~/.tmux.conf já aponta para o repo."; exit 0; fi; \
-	if [ -e $$dst ] || [ -L $$dst ]; then mv $$dst $$dst.bak && echo "Backup: $$dst.bak"; fi; \
-	ln -s $(DIR)/tmux.conf $$dst && echo "Linkado: ~/.tmux.conf -> $(DIR)/tmux.conf (vale para sessões novas)."
+	if [ "$$(readlink -f "$$dst")" = "$(DIR)/tmux.conf" ]; then echo "~/.tmux.conf already points to the repo."; exit 0; fi; \
+	if [ -e "$$dst" ] || [ -L "$$dst" ]; then bak=$$dst.bak; [ -e "$$bak" ] && bak=$$bak.$$(date +%s); \
+	  mv "$$dst" "$$bak" && echo "Backup: $$bak"; fi; \
+	ln -s "$(DIR)/tmux.conf" "$$dst" && echo "Linked: ~/.tmux.conf -> $(DIR)/tmux.conf (applies to new sessions)."
 
-alias: ## Adiciona o alias "tm" ao ~/.bashrc, se ainda não existir
-	@if grep -q "^alias tm=" $$HOME/.bashrc 2>/dev/null; then echo "Alias 'tm' já existe no ~/.bashrc."; else \
+alias: ## Add the "tm" alias to ~/.bashrc if missing
+	@if grep -q "^alias tm=" $$HOME/.bashrc 2>/dev/null; then echo "Alias 'tm' already exists in ~/.bashrc."; else \
 	  echo "alias tm='make --no-print-directory -C \"$(DIR)\"'" >> $$HOME/.bashrc; \
-	  echo "Alias adicionado. Rode: source ~/.bashrc"; fi
+	  echo "Alias added. Run: source ~/.bashrc"; fi
 
-plugins: ## Instala o TPM e os plugins (resurrect, continuum) do tmux.conf
+plugins: ## Install TPM and the tmux.conf plugins (resurrect, continuum)
 	$(check)
 	@test -d $$HOME/.tmux/plugins/tpm || git clone -q https://github.com/tmux-plugins/tpm $$HOME/.tmux/plugins/tpm
 	@# TPM runs on the next step, so pin it first: nothing from GitHub HEAD gets executed.
@@ -111,26 +112,26 @@ plugins: ## Instala o TPM e os plugins (resurrect, continuum) do tmux.conf
 	@# Plugins stay on the commits pinned above, not on whatever is at GitHub HEAD.
 	@P=$$HOME/.tmux/plugins; \
 	  git -C $$P/tpm checkout -q $(TPM_SHA) && git -C $$P/tmux-resurrect checkout -q $(RESURRECT_SHA) \
-	  && git -C $$P/tmux-continuum checkout -q $(CONTINUUM_SHA) || { echo "Falha ao fixar os commits dos plugins."; exit 1; }
+	  && git -C $$P/tmux-continuum checkout -q $(CONTINUUM_SHA) || { echo "Failed to pin the plugin commits."; exit 1; }
 	@# resurrect stores pane contents as plain text: only the owner may read it.
 	@mkdir -p $$HOME/.local/share/tmux/resurrect && chmod 700 $$HOME/.local/share/tmux/resurrect
-	@echo "Plugins instalados. Em sessões abertas: tmux source ~/.tmux.conf"
+	@echo "Plugins installed. In open sessions run: tmux source ~/.tmux.conf"
 
-boot: ## Sobe o tmux no login (restaura as sessões salvas e salva ao desligar)
+boot: ## Start tmux at login (restores saved sessions, saves on shutdown)
 	$(check)
-	@test -d $$HOME/.tmux/plugins/tmux-resurrect || { echo "Rode antes: tm plugins"; exit 1; }
+	@test -d $$HOME/.tmux/plugins/tmux-resurrect || { echo "Run first: tm plugins"; exit 1; }
 	@# A copy, not a link: the service keeps working if this repo is moved or deleted. Re-run to update it.
 	@unit=$$HOME/.config/systemd/user/tmux.service; \
 	  mkdir -p "$$(dirname "$$unit")" && rm -f "$$unit" && install -m 644 "$(DIR)/tmux.service" "$$unit" \
 	  && systemctl --user daemon-reload && systemctl --user reenable tmux.service
-	@echo "Ativo no próximo login. Para subir agora: systemctl --user start tmux"
+	@echo "Enabled for the next login. To start it now: systemctl --user start tmux"
 	@# Without linger, systemd stops the user's services when the last session ends.
 	@loginctl show-user "$$USER" -p Linger 2>/dev/null | grep -q yes \
-	  || echo "Dica: para o tmux sobreviver ao último logout (ex.: queda de SSH), rode: loginctl enable-linger"
-	@echo "Sessões em aberto:"
+	  || echo "Tip: for tmux to survive the last logout (e.g. an SSH drop), run: loginctl enable-linger"
+	@echo "Open sessions:"
 	@$(MAKE) --no-print-directory ls
 
-setup: ## Faz tudo de uma vez: tmux, config, alias, plugins e boot
+setup: ## Do everything: tmux, config, alias, plugins and boot
 	@command -v tmux >/dev/null || $(MAKE) --no-print-directory install
 	@for t in conf alias plugins boot; do $(MAKE) --no-print-directory $$t || exit 1; done
-	@echo "Pronto. Abra um novo terminal (ou: source ~/.bashrc) e use: tm attach NOME"
+	@echo "Done. Open a new terminal (or: source ~/.bashrc) and use: tm attach NAME"
