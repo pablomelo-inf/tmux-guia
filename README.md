@@ -6,12 +6,12 @@ My tmux config plus a Makefile of session shortcuts (`tm`). Keeps terminals aliv
 
 ```sh
 sudo apt install -y git make
-git clone git@github.com:pablomelo-inf/tmux-guia.git ~/tmux-guia
-cd ~/tmux-guia
+git clone git@github.com:pablomelo-inf/tmux-guia.git
+cd tmux-guia
 make setup     # installs tmux if missing, links tmux.conf, adds alias, installs plugins, enables boot service
 ```
 
-Clone to `~/tmux-guia`: the alias points there. Without an SSH key on GitHub, clone via `https://github.com/pablomelo-inf/tmux-guia.git` instead.
+Clone anywhere: the alias points to wherever you cloned. Without an SSH key on GitHub, clone via `https://github.com/pablomelo-inf/tmux-guia.git` instead.
 
 ## Updating
 
@@ -38,7 +38,9 @@ Session commands need the name right after: `tm attach work`.
 tmux itself dies on shutdown, so this repo saves and rebuilds the environment instead:
 
 - **tmux-continuum** saves every 5 min; **tmux-resurrect** restores sessions, named windows, panes, directories and pane contents.
-- `tm boot` installs a systemd user service: tmux starts at login (restoring the last save) and saves again on a clean shutdown.
+- `tm boot` installs a systemd user service: tmux starts at login (restoring the last save) and saves again on a clean shutdown. The unit is a *copy* in `~/.config/systemd/user/`, so it survives moving the repo; re-run `tm boot` after editing `tmux.service`.
+- **SSH drops / last logout:** without lingering, systemd stops your services when your last session ends, which also stops tmux. Run `loginctl enable-linger` once to avoid that (`tm boot` reminds you).
+- `@continuum-boot 'on'` in `tmux.conf` is required: otherwise continuum runs `systemctl --user disable tmux.service` on every start and the service hangs until its 90 s timeout.
 - `claude` panes are relaunched as `claude --continue` (see `@resurrect-processes` in `tmux.conf`). This is untested: if it doesn't match, adjust that line.
 - **Not restored:** running processes (`npm run dev`, `docker compose logs`, ...). You get the pane in the right directory; restart the command, or add it to `@resurrect-processes`.
 - **Privacy:** `@resurrect-capture-pane-contents` saves pane text (anything shown on screen, secrets included) in plain text under `~/.local/share/tmux/resurrect`. `tm plugins` makes that folder owner-only (`700`). Remove that line from `tmux.conf` if you don't want it.
@@ -70,7 +72,24 @@ Common keys (after the prefix):
 
 | Symptom | Cause |
 |---|---|
+| `tm boot` then `systemctl --user start tmux` hangs 90 s | `@continuum-boot` is not `'on'` in `tmux.conf` (see above), or the unit is stale: re-run `tm boot` |
+| `tm kill clean` says the name is also a command | Names equal to a command are refused so they never run it: use `tm kill S=clean` |
 | `Ctrl+b` does nothing | Not inside tmux (no green status bar), or `d` pressed together with it |
 | `no server running` | No session: other user/machine, or it died after `exit` |
 | `sessions should be nested with care` | Already inside tmux; detach first |
 | Scroll doesn't work | Run `tm conf` (enables mouse) or use `Ctrl+b [` |
+
+## Development
+
+```sh
+tests/test.sh                 # offline tests, in a throwaway HOME and tmux socket
+RUN_NETWORK=1 tests/test.sh   # also installs the plugins and checks the pinned commits
+```
+
+CI (`.github/workflows/ci.yml`) runs `shellcheck` and the full test suite on every push and PR. Plugins are pinned to audited commits (`*_SHA` in the `Makefile`); to update one, review the upstream diff first. Dependabot keeps the GitHub Actions up to date.
+
+The `tm` arguments never reach the shell as code, and a session named like a command (`clean`, `kill`...) is refused as a positional argument; use `S=`/`N=` for those.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
