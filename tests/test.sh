@@ -2,6 +2,8 @@
 # Tests for the Makefile. Runs in a throwaway HOME and tmux socket directory,
 # so it never touches the real sessions or dotfiles.
 # Network tests (plugin install + pinned commits): RUN_NETWORK=1 tests/test.sh
+# `cond && ok ... || fail ...` is safe here: ok only echoes, so it never fails and trips the `||`.
+# shellcheck disable=SC2015
 set -u
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
