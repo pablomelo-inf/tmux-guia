@@ -99,6 +99,8 @@ boot: ## Sobe o tmux no login (restaura as sessões salvas e salva ao desligar)
 	@test -d $$HOME/.tmux/plugins/tmux-resurrect || { echo "Rode antes: tm plugins"; exit 1; }
 	@systemctl --user enable $(DIR)/tmux.service
 	@echo "Ativo no próximo login. Para subir agora: systemctl --user start tmux"
+	@echo "Sessões em aberto:"
+	@$(MAKE) --no-print-directory ls
 
 setup: ## Faz tudo de uma vez: tmux, config, alias, plugins e boot
 	@command -v tmux >/dev/null || $(MAKE) --no-print-directory install
