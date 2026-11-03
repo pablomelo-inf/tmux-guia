@@ -2,7 +2,10 @@
 # Commands that use a session take its name right after: tm attach home
 
 .DEFAULT_GOAL := help
-.PHONY: help ls attach create detach rename kill clean kill-all install conf alias plugins boot setup
+
+# Every target documented with "##" is a command (single source: the targets below).
+COMMANDS := $(shell sed -n 's/^\([a-z-]*\):.*\#\# .*/\1/p' $(MAKEFILE_LIST))
+.PHONY: $(COMMANDS)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
 TPM_SHA := e261deb1b47614eed3400089ce7197dc68acc4eb
@@ -12,15 +15,19 @@ CONTINUUM_SHA := 0698e8f4b17d6454c71bf5212895ec055c578da0
 # Folder of this Makefile (where tmux.conf lives)
 DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
-# Session name: the 2nd argument (tm attach home) or S=home
-NAME := $(or $(S),$(word 2,$(MAKECMDGOALS)))
-NOVO := $(or $(N),$(word 3,$(MAKECMDGOALS)))
+# Words after the command are arguments, not targets: tm rename OLD NEW
+ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+NAME := $(or $(S),$(word 1,$(ARGS)))
+NOVO := $(or $(N),$(word 2,$(ARGS)))
 # Passed to the shell as environment variables (quoted in the recipes): a name with ; or $() is never run as a command.
 export NAME NOVO
 
-# The extra arguments (home, new...) are not commands: ignore them.
-ifneq ($(words $(MAKECMDGOALS)),1)
-$(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS)):
+ifneq ($(ARGS),)
+# A name equal to a command (tm kill clean) would also run that command: refuse it.
+ifneq ($(filter $(COMMANDS),$(ARGS)),)
+$(error "$(filter $(COMMANDS),$(ARGS))" is also a command name. Pass it with S=/N= instead, e.g.: tm kill S=clean)
+endif
+$(ARGS):
 	@:
 endif
 

@@ -25,7 +25,10 @@ tm() { make --no-print-directory -C "$REPO" "$@"; }
 
 # --- help and dry runs -------------------------------------------------------
 check "help runs" tm help
-for t in ls attach create detach rename kill clean kill-all install conf alias plugins boot setup; do
+# The command list comes from the Makefile itself, so new commands are covered automatically.
+commands=$(tm -pn help 2>/dev/null | sed -n 's/^COMMANDS := //p')
+[ -n "$commands" ] && ok "commands found: $commands" || fail "no commands found in the Makefile"
+for t in $commands; do
   check "dry run: $t" tm -n "$t" S=x N=y
 done
 
@@ -34,6 +37,15 @@ pin_line=$(tm -n plugins | grep -n 'tpm checkout' | head -1 | cut -d: -f1)
 run_line=$(tm -n plugins | grep -n 'source-file' | head -1 | cut -d: -f1)
 [ -n "$pin_line" ] && [ -n "$run_line" ] && [ "$pin_line" -lt "$run_line" ] \
   && ok "plugins: TPM is pinned before it runs" || fail "plugins: TPM runs before being pinned"
+
+# --- a session named like a command must not run that command ---------------
+tm create S=clean >/dev/null 2>&1; tm create S=other >/dev/null 2>&1
+tm kill clean >/dev/null 2>&1 && fail "kill clean: should be refused" || ok "kill clean: refused"
+tmux has-session -t other 2>/dev/null && ok "kill clean: other sessions untouched" || fail "kill clean: killed other sessions"
+tm kill S=clean >/dev/null 2>&1
+{ ! tmux has-session -t clean 2>/dev/null && tmux has-session -t other 2>/dev/null; } \
+  && ok "kill S=clean: kills only that session" || fail "kill S=clean: wrong result"
+tm kill S=other >/dev/null 2>&1
 
 # --- session names are data, never commands ---------------------------------
 tm create S="a b;touch $WORK/pwned" >/dev/null 2>&1
