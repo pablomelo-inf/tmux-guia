@@ -33,6 +33,18 @@ Session commands need the name right after: `tm attach work`.
 | `tm kill-all` | Kill everything (asks first) |
 | `tm setup` | Everything in one go: `install`, `conf`, `alias`, `plugins`, `boot` (each also runs alone) |
 
+## Copy & paste
+
+- **Copy:** select with the mouse; on release the text is copied. In copy mode (`Ctrl+b [`) use `Space` to start selecting and `Enter` to copy.
+- **Scroll:** mouse wheel or `PageUp` (no need for `Ctrl+b [`); scrolling back to the bottom leaves copy mode.
+- **Paste:** middle click, or `Ctrl+b ]`.
+- Mouse copy goes to the tmux buffer, so middle click / `Ctrl+b ]` paste it inside tmux. It reaches the system clipboard only if `wl-copy`/`xclip`/`xsel` is installed. Without one of them (e.g. GNOME Terminal), to copy to other apps, use `Shift`+drag and `Ctrl+Shift+C` (below).
+- `Shift`+drag skips tmux and uses the terminal's own selection; then `Ctrl+Shift+C` copies and `Ctrl+Shift+V` pastes (those two keys belong to the terminal, tmux never sees them).
+
+## Terminal tab title
+
+`set-titles` in `tmux.conf` sends the tmux session name to the terminal, so each tab/window is titled with its session (e.g. `projetolivro`) instead of `user@host: ~`. To also show the window, change `set-titles-string` to `'#S:#W'`. If the title doesn't change in GNOME Terminal, set the profile's *Title and Command* → initial title option to *Replace initial title*, and open a new tab.
+
 ## Surviving reboots
 
 tmux itself dies on shutdown, so this repo saves and rebuilds the environment instead:
