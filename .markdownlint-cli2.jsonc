@@ -1,0 +1,4 @@
+{
+  // Prose and tables are written on long lines on purpose.
+  "config": { "MD013": false, "MD060": false, "MD033": false }
+}

@@ -1,0 +1,491 @@
+#!/usr/bin/env bash
+# tm: tmux session shortcuts. "tm help" lists the commands.
+# Arguments are plain data: a session may be called "clean", "a b" or "-x" and is never run as code.
+# Not "set -e": every command checks its own steps and says what failed.
+# `cond && good ... || warn ...` is safe here: good/warn only echo, so the || never runs after a success.
+# shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
+set -uo pipefail
+
+TM_VERSION=2.0.0
+REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+
+# Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
+TPM_SHA=e261deb1b47614eed3400089ce7197dc68acc4eb
+RESURRECT_SHA=cff343cf9e81983d3da0c8562b01616f12e8d548
+CONTINUUM_SHA=0698e8f4b17d6454c71bf5212895ec055c578da0
+
+PLUGINS=$HOME/.tmux/plugins
+RESURRECT=$PLUGINS/tmux-resurrect
+SAVES=${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect
+UNIT=$HOME/.config/systemd/user/tmux.service
+BIN=$HOME/.local/bin
+COMP_BASH=${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/tm
+COMP_ZSH=${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions/_tm
+COMP_FISH=${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/tm.fish
+# The alias older versions wrote to ~/.bashrc (it ran make with the command as a target).
+OLD_ALIAS="^alias tm='make --no-print-directory -C "
+
+# name|arguments|description. Single source for help, completion and the dispatcher check in the tests.
+COMMANDS=(
+  "ls||List sessions and whether they are in use"
+  "attach|NAME [DIR]|Attach, creating the session (in DIR) if missing; inside tmux it switches"
+  "create|NAME [DIR]|Create a session without attaching"
+  "pick||Choose a session with fzf and attach (also: tm with no arguments)"
+  "open|[--all] [NAME...]|Open sessions in terminal tabs (default: every free one)"
+  "detach|NAME|Detach its clients, keep the session running"
+  "rename|OLD NEW|Rename a session"
+  "kill|NAME|Kill a session (whatever ran in it is lost)"
+  "clean||Kill every free session; keep the ones in use"
+  "kill-all||Kill every session, even those in use (asks first)"
+  "save||Save all sessions now (tmux-resurrect)"
+  "restore||Restore the last save"
+  "setup||Do everything: install, conf, link, plugins, boot"
+  "install||Install tmux"
+  "conf||Link tmux.conf to ~/.tmux.conf (backs up an existing one)"
+  "link||Install tm in ~/.local/bin and its shell completions"
+  "plugins||Install the plugins on their audited commits"
+  "boot||Start tmux at login (restores the last save, saves on shutdown)"
+  "update||Pull this repo and apply what changed"
+  "doctor||Check the installation"
+  "uninstall||Undo setup (keeps plugins and saved sessions)"
+  "completion|SHELL|Print the completion script for bash, zsh or fish"
+  "version||Show the version"
+  "help||Show this help"
+)
+
+if [ -t 1 ]; then B=$(tput bold 2>/dev/null || true); R=$(tput sgr0 2>/dev/null || true); else B=; R=; fi
+
+die() { echo "$*" >&2; exit 1; }
+need_tmux() { command -v tmux >/dev/null || die "tmux is not installed. Run: tm install"; }
+need_name() {
+  [ -n "${1:-}" ] && return 0
+  echo "Give a session name. E.g.: tm $CMD name" >&2
+  cmd_ls >&2
+  exit 1
+}
+# "=NAME" is an exact match: plain "-t pro" would pick session "projeto" by prefix.
+exists() { tmux has-session -t "=$1" 2>/dev/null; }
+sessions() { tmux ls -F '#{session_name}' 2>/dev/null; }
+free_sessions() { tmux ls -F '#{?session_attached,,#{session_name}}' 2>/dev/null | sed '/^$/d'; }
+links_to() { [ -L "$1" ] && [ "$(readlink -f "$1")" = "$(readlink -f "$2")" ]; }
+render_unit() { sed "s|@TMUX@|$(command -v tmux)|" "$REPO/tmux.service"; }
+
+cmd_help() {
+  local c name args desc
+  echo "Usage: tm COMMAND [ARGS]   (tm with no arguments picks a session when fzf is installed)"
+  for c in "${COMMANDS[@]}"; do
+    IFS='|' read -r name args desc <<<"$c"
+    printf "  %s%-10s%s %-20s %s\n" "$B" "$name" "$R" "$args" "$desc"
+  done
+  echo "Example: tm attach home ~/projects/home"
+  echo "To leave tmux without ending the session: Ctrl+b, release, d (never 'exit')."
+}
+
+cmd_ls() {
+  need_tmux
+  tmux ls -F '  #{session_name}: #{session_windows} window(s), #{?session_attached,in use,free}' 2>/dev/null \
+    || echo "No sessions running."
+}
+
+# Creates NAME (in DIR) and prints the name tmux really used: it turns "." and ":" into "_".
+new_session() {
+  local name=$1 dir=${2:-}
+  if [ -n "$dir" ]; then
+    [ -d "$dir" ] || die "Not a directory: $dir"
+    tmux new-session -d -P -F '#{session_name}' -s "$name" -c "$dir"
+  else
+    tmux new-session -d -P -F '#{session_name}' -s "$name"
+  fi
+}
+
+cmd_attach() {
+  need_tmux; need_name "${1:-}"
+  local name=$1 dir=${2:-}
+  if exists "$name"; then
+    [ -z "$dir" ] || echo "Session '$name' already exists; DIR ignored." >&2
+  else
+    name=$(new_session "$name" "$dir") || exit 1
+  fi
+  # Inside tmux, attaching would nest a client: switch this client to the session instead.
+  if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "=$name"
+  else
+    exec tmux attach-session -t "=$name"
+  fi
+}
+
+cmd_create() {
+  need_tmux; need_name "${1:-}"
+  exists "$1" && die "Session '$1' already exists. To attach: tm attach $1"
+  local name
+  name=$(new_session "$1" "${2:-}") || exit 1
+  echo "Session '$name' created. To attach: tm attach $name"
+}
+
+cmd_pick() {
+  need_tmux
+  command -v fzf >/dev/null || die "fzf is not installed (sudo apt install fzf). Or: tm attach NAME"
+  sessions >/dev/null || die "No sessions running. Create one: tm attach NAME"
+  local s
+  s=$(sessions | fzf --prompt 'session> ' --height 40% --reverse --preview 'tmux capture-pane -ep -t ={}:') || exit 0
+  cmd_attach "$s"
+}
+
+# Which terminal opens the tabs: TM_TERMINAL, else the one tm runs in, else the first installed.
+pick_terminal() {
+  if [ -n "${TM_TERMINAL:-}" ]; then echo "$TM_TERMINAL"; return; fi
+  local t
+  if [ -n "${KITTY_WINDOW_ID:-}" ]; then t=kitty
+  elif [ -n "${WEZTERM_PANE:-}" ]; then t=wezterm
+  elif [ -n "${KONSOLE_VERSION:-}" ]; then t=konsole
+  elif [ -n "${GNOME_TERMINAL_SCREEN:-}" ]; then t=gnome-terminal
+  fi
+  if [ -n "${t:-}" ] && command -v "$t" >/dev/null; then echo "$t"; return; fi
+  for t in gnome-terminal konsole xfce4-terminal kitty wezterm; do
+    command -v "$t" >/dev/null && { echo "$t"; return; }
+  done
+  return 1
+}
+
+open_one() { # TERMINAL FIRST(1/0) SESSION
+  local term=$1 first=$2
+  # The new tab may inherit TMUX from here; tmux would then refuse to attach ("nested").
+  local cmd=(env -u TMUX -u TMUX_PANE tmux attach-session -t "=$3")
+  case ${term##*/} in
+    gnome-terminal)
+      if [ "$first" = 1 ]; then "$term" --window -- "${cmd[@]}"; else "$term" --tab -- "${cmd[@]}"; fi ;;
+    xfce4-terminal)
+      if [ "$first" = 1 ]; then "$term" --window -x "${cmd[@]}"; else "$term" --tab -x "${cmd[@]}"; fi ;;
+    konsole) "$term" --new-tab -e "${cmd[@]}" >/dev/null 2>&1 & ;;
+    kitty)
+      if [ -n "${KITTY_LISTEN_ON:-}" ] && command -v kitten >/dev/null; then kitten @ launch --type=tab "${cmd[@]}" >/dev/null
+      else "$term" "${cmd[@]}" >/dev/null 2>&1 & fi ;;
+    wezterm)
+      if [ -n "${WEZTERM_PANE:-}" ]; then "$term" cli spawn -- "${cmd[@]}" >/dev/null
+      else "$term" start -- "${cmd[@]}" >/dev/null 2>&1 & fi ;;
+    # Anything else (xterm, alacritty, foot, tilix...): one window per session, "-e COMMAND".
+    *) "$term" -e "${cmd[@]}" >/dev/null 2>&1 & ;;
+  esac </dev/null
+}
+
+cmd_open() {
+  need_tmux
+  local all=0 names=() s
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -a|--all) all=1 ;;
+      --) shift; names+=("$@"); break ;;
+      *) names+=("$1") ;;
+    esac
+    shift
+  done
+  if [ ${#names[@]} -gt 0 ]; then
+    for s in "${names[@]}"; do exists "$s" || die "No session '$s'."; done
+  elif [ $all = 1 ]; then
+    mapfile -t names < <(sessions)
+  else
+    # Sessions in use are skipped by default: a second client would only mirror the first one.
+    mapfile -t names < <(free_sessions)
+  fi
+  [ ${#names[@]} -gt 0 ] || { echo "No free sessions to open (tm open --all includes the ones in use)."; return 0; }
+  local term n=0 first=1
+  term=$(pick_terminal) || die "No supported terminal found. Set TM_TERMINAL, e.g.: TM_TERMINAL=xterm tm open"
+  command -v "$term" >/dev/null || die "Terminal not found: $term"
+  for s in "${names[@]}"; do
+    open_one "$term" "$first" "$s" && n=$((n + 1))
+    first=0
+  done
+  echo "$n session(s) opened in ${term##*/}."
+}
+
+cmd_detach() {
+  need_tmux; need_name "${1:-}"
+  tmux detach-client -s "=$1" && echo "Session '$1' detached, still running."
+}
+
+cmd_rename() {
+  need_tmux; need_name "${1:-}"
+  [ -n "${2:-}" ] || die "Missing the new name. E.g.: tm rename $1 other"
+  tmux rename-session -t "=$1" "$2" && echo "'$1' is now called '$2'."
+}
+
+cmd_kill() {
+  need_tmux; need_name "${1:-}"
+  tmux kill-session -t "=$1" && echo "Session '$1' killed."
+}
+
+cmd_clean() {
+  need_tmux
+  local n=0 s
+  while IFS= read -r s; do
+    tmux kill-session -t "=$s" && echo "killed: $s" && n=$((n + 1))
+  done < <(free_sessions)
+  echo "$n session(s) killed."
+}
+
+cmd_kill_all() {
+  need_tmux
+  local r
+  read -r -p "Kill ALL sessions? [y/N] " r
+  if [ "$r" = y ]; then tmux kill-server && echo "Everything killed."; else echo "Cancelled."; fi
+}
+
+need_resurrect() { [ -x "$RESURRECT/scripts/save.sh" ] || die "tmux-resurrect is not installed. Run: tm plugins"; }
+
+cmd_save() {
+  need_tmux; need_resurrect
+  tmux has-session 2>/dev/null || die "No sessions running."
+  # Without a UTF-8 locale tmux prints tabs as "_" and resurrect writes an empty save (see tmux.service).
+  LC_ALL=C.UTF-8 "$RESURRECT/scripts/save.sh" && echo "Saved in $SAVES"
+}
+
+cmd_restore() {
+  need_tmux; need_resurrect
+  if ! tmux has-session 2>/dev/null; then
+    # Started like the boot service: panes inherit LANG, so C.UTF-8 only when it is unset.
+    LANG="${LANG:-C.UTF-8}" tmux new-session -d || exit 1
+    if [ "$(tmux show -gv @continuum-restore 2>/dev/null)" = on ] && [ -d "$PLUGINS/tmux-continuum" ]; then
+      # continuum restores a new server by itself; restoring again would race it. Wait instead:
+      # resurrect drops the starting session "0" when it is done (and the server exits if nothing was saved).
+      local _
+      for _ in $(seq 150); do tmux has-session -t =0 2>/dev/null || break; sleep 0.1; done
+      tmux has-session 2>/dev/null || die "Nothing to restore (no save yet?)."
+      echo "Restored. See: tm ls"
+      return 0
+    fi
+  fi
+  LC_ALL=C.UTF-8 "$RESURRECT/scripts/restore.sh" && echo "Restored. See: tm ls"
+}
+
+cmd_install() {
+  if command -v tmux >/dev/null; then echo "tmux is already installed ($(tmux -V))."; return 0; fi
+  if command -v apt-get >/dev/null; then sudo apt-get install -y tmux
+  elif command -v dnf >/dev/null; then sudo dnf install -y tmux
+  elif command -v pacman >/dev/null; then sudo pacman -S --needed --noconfirm tmux
+  elif command -v zypper >/dev/null; then sudo zypper install -y tmux
+  elif command -v brew >/dev/null; then brew install tmux
+  else die "No known package manager. Install tmux 3.2+ by hand."
+  fi
+}
+
+cmd_conf() {
+  local dst=$HOME/.tmux.conf bak
+  if links_to "$dst" "$REPO/tmux.conf"; then echo "~/.tmux.conf already points to the repo."; return 0; fi
+  if [ -e "$dst" ] || [ -L "$dst" ]; then
+    bak=$dst.bak
+    # Never overwrite an older backup.
+    [ -e "$bak" ] && bak=$bak.$(date +%s)
+    mv "$dst" "$bak" && echo "Backup: $bak" || exit 1
+  fi
+  ln -s "$REPO/tmux.conf" "$dst" || exit 1
+  echo "Linked: ~/.tmux.conf -> $REPO/tmux.conf (applies to new sessions; to reload: Ctrl+b r)."
+  echo "Machine-specific settings go in ~/.tmux.local.conf (loaded at the end, not in the repo)."
+}
+
+link_file() { # SOURCE DEST: a link to the repo; an unrelated file is left alone.
+  if [ -e "$2" ] && [ ! -L "$2" ]; then echo "Skipped $2: a file that is not a link is already there." >&2; return 1; fi
+  mkdir -p "$(dirname "$2")" && ln -sfn "$1" "$2"
+}
+
+cmd_link() {
+  link_file "$REPO/bin/tm" "$BIN/tm" || exit 1
+  echo "Installed: ~/.local/bin/tm -> $REPO/bin/tm"
+  link_file "$REPO/completions/tm.bash" "$COMP_BASH" && echo "bash completion installed (needs the bash-completion package)."
+  if command -v zsh >/dev/null && link_file "$REPO/completions/_tm" "$COMP_ZSH"; then
+    echo "zsh completion installed. In ~/.zshrc, before compinit: fpath=(~/.local/share/zsh/site-functions \$fpath)"
+  fi
+  if command -v fish >/dev/null && link_file "$REPO/completions/tm.fish" "$COMP_FISH"; then
+    echo "fish completion installed."
+  fi
+  if grep -q "$OLD_ALIAS" "$HOME/.bashrc" 2>/dev/null; then
+    sed -i.tm-backup "\|$OLD_ALIAS|d" "$HOME/.bashrc" \
+      && echo "Removed the old make-based 'tm' alias from ~/.bashrc (backup: ~/.bashrc.tm-backup). Open a new terminal."
+  fi
+  case ":$PATH:" in
+    *":$BIN:"*) ;;
+    *) echo "~/.local/bin is not in PATH yet. Ubuntu adds it at the next login; or add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
+}
+
+# A plugin is moved to its pinned commit, fetching first if that commit is not there yet (after an update).
+pin() { # DIR SHA
+  git -C "$1" checkout -q "$2" 2>/dev/null || { git -C "$1" fetch -q origin && git -C "$1" checkout -q "$2"; }
+}
+
+cmd_plugins() {
+  need_tmux
+  [ -d "$PLUGINS/tpm" ] || git clone -q https://github.com/tmux-plugins/tpm "$PLUGINS/tpm" || die "Could not clone TPM."
+  # TPM runs on the next step, so pin it first: nothing from GitHub HEAD gets executed.
+  pin "$PLUGINS/tpm" "$TPM_SHA" || die "Could not pin TPM to $TPM_SHA."
+  # TPM reads the plugin path from the tmux server: make sure one is running and reload the config.
+  local started=0 rc
+  tmux has-session 2>/dev/null || { tmux new-session -d -s _tpm && started=1; }
+  tmux source-file "$HOME/.tmux.conf"
+  "$PLUGINS/tpm/bin/install_plugins"; rc=$?
+  [ $started = 1 ] && tmux kill-session -t =_tpm
+  [ $rc = 0 ] || die "TPM failed to install the plugins."
+  # Plugins stay on the commits pinned above, not on whatever is at GitHub HEAD.
+  pin "$PLUGINS/tmux-resurrect" "$RESURRECT_SHA" && pin "$PLUGINS/tmux-continuum" "$CONTINUUM_SHA" \
+    || die "Failed to pin the plugin commits."
+  # resurrect stores pane contents as plain text: only the owner may read it.
+  mkdir -p "$SAVES" && chmod 700 "$SAVES"
+  echo "Plugins installed. In open sessions: Ctrl+b r (reload the config)."
+}
+
+plugins_pinned() {
+  [ "$(git -C "$PLUGINS/tpm" rev-parse HEAD 2>/dev/null)" = "$TPM_SHA" ] \
+    && [ "$(git -C "$RESURRECT" rev-parse HEAD 2>/dev/null)" = "$RESURRECT_SHA" ] \
+    && [ "$(git -C "$PLUGINS/tmux-continuum" rev-parse HEAD 2>/dev/null)" = "$CONTINUUM_SHA" ]
+}
+
+cmd_boot() {
+  need_tmux
+  [ -d "$RESURRECT" ] || die "Run first: tm plugins"
+  # A copy, not a link: the service keeps working if this repo is moved or deleted. Re-run to update it.
+  # The tmux path is filled in here, so a tmux outside /usr/bin (brew, /usr/local) works too.
+  mkdir -p "$(dirname "$UNIT")" || exit 1
+  render_unit > "$UNIT.new" && chmod 644 "$UNIT.new" && mv -f "$UNIT.new" "$UNIT" || die "Could not write $UNIT"
+  systemctl --user daemon-reload && systemctl --user reenable tmux.service || die "systemctl failed."
+  echo "Enabled for the next login. To start it now: systemctl --user start tmux"
+  # Without linger, systemd stops the user's services when the last session ends.
+  loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes \
+    || echo "Tip: for tmux to survive the last logout (e.g. an SSH drop), run: loginctl enable-linger"
+}
+
+cmd_setup() {
+  command -v tmux >/dev/null || cmd_install || exit 1
+  local step
+  for step in conf link plugins boot; do
+    echo "== $step =="
+    "$REPO/bin/tm" "$step" || exit 1
+  done
+  echo "Done. Open a new terminal and use: tm attach NAME"
+}
+
+cmd_update() {
+  git -C "$REPO" pull --ff-only || die "git pull failed (local changes?). Nothing else was changed."
+  # Run the new version of this script for the rest.
+  exec "$REPO/bin/tm" _after-update
+}
+
+after_update() {
+  if [ -L "$BIN/tm" ]; then "$REPO/bin/tm" link >/dev/null; fi
+  if [ -d "$PLUGINS/tpm" ] && ! plugins_pinned; then echo "== plugins (pinned commits changed) =="; cmd_plugins; fi
+  if [ -f "$UNIT" ] && ! render_unit | cmp -s - "$UNIT"; then echo "== boot (tmux.service changed) =="; cmd_boot; fi
+  if command -v tmux >/dev/null && tmux has-session 2>/dev/null && [ -e "$HOME/.tmux.conf" ]; then
+    tmux source-file "$HOME/.tmux.conf" && echo "Config reloaded in the running tmux."
+  fi
+  echo "Up to date: tm $(sed -n 's/^TM_VERSION=//p' "$REPO/bin/tm")"
+}
+
+cmd_doctor() {
+  local bad=0
+  good() { echo "  ok    $*"; }
+  warn() { echo "  warn  $*"; }
+  err() { echo "  FAIL  $*"; bad=1; }
+  echo "tm $TM_VERSION ($REPO)"
+  if command -v tmux >/dev/null; then
+    local v; v=$(tmux -V | sed 's/[^0-9.]//g')
+    if printf '3.2\n%s\n' "$v" | sort -V -C; then good "$(tmux -V)"; else err "$(tmux -V): 3.2 or newer is needed"; fi
+  else err "tmux not installed: tm install"; fi
+  if links_to "$HOME/.tmux.conf" "$REPO/tmux.conf"; then good "~/.tmux.conf -> repo"; else err "~/.tmux.conf does not point to the repo: tm conf"; fi
+  [ -e "$HOME/.tmux.local.conf" ] && good "local overrides: ~/.tmux.local.conf"
+  if links_to "$BIN/tm" "$REPO/bin/tm"; then good "~/.local/bin/tm -> repo"; else err "tm is not installed in ~/.local/bin: tm link"; fi
+  case ":$PATH:" in *":$BIN:"*) good "~/.local/bin is in PATH" ;; *) warn "~/.local/bin is not in PATH (next login, or add it to your shell rc)" ;; esac
+  grep -q "$OLD_ALIAS" "$HOME/.bashrc" 2>/dev/null && err "old make-based alias still in ~/.bashrc: tm link"
+  links_to "$COMP_BASH" "$REPO/completions/tm.bash" && good "bash completion" || warn "bash completion not installed: tm link"
+  if [ -d "$PLUGINS/tpm" ]; then
+    plugins_pinned && good "plugins on the pinned commits" || err "plugins not on the pinned commits: tm plugins"
+  else err "plugins not installed: tm plugins"; fi
+  if [ -d "$SAVES" ]; then
+    [ "$(stat -c %a "$SAVES")" = 700 ] && good "saves are owner-only ($SAVES)" || err "$SAVES is readable by others: chmod 700 it"
+  fi
+  if [ -f "$UNIT" ]; then
+    render_unit | cmp -s - "$UNIT" && good "boot service up to date" || warn "boot service differs from the repo: tm boot"
+    if command -v systemctl >/dev/null; then
+      systemctl --user is-enabled tmux.service >/dev/null 2>&1 && good "boot service enabled" || err "boot service not enabled: tm boot"
+    fi
+    loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes && good "linger on" || warn "linger off: tmux stops at the last logout (loginctl enable-linger)"
+  else warn "boot service not installed: tm boot"; fi
+  if command -v wl-copy >/dev/null || command -v xclip >/dev/null || command -v xsel >/dev/null; then good "system clipboard tool found"
+  else warn "no wl-copy/xclip/xsel: mouse copies stay inside tmux (see README, Copy & paste)"; fi
+  command -v fzf >/dev/null && good "fzf (tm pick)" || warn "fzf not installed: 'tm' alone shows the help instead of a picker"
+  local t; t=$(pick_terminal) && good "terminal for tm open: ${t##*/}" || warn "no terminal for tm open (set TM_TERMINAL)"
+  [ $bad = 0 ] && echo "All good." || echo "Fix the FAIL lines above."
+  return $bad
+}
+
+cmd_uninstall() {
+  local r
+  read -r -p "Undo setup (boot service, ~/.tmux.conf link, tm command)? Running sessions keep running. [y/N] " r
+  [ "$r" = y ] || { echo "Cancelled."; return 0; }
+  if [ -f "$UNIT" ]; then
+    command -v systemctl >/dev/null && systemctl --user disable tmux.service 2>/dev/null
+    rm -f -- "$UNIT" && echo "Removed the boot service."
+    command -v systemctl >/dev/null && systemctl --user daemon-reload 2>/dev/null
+  fi
+  if links_to "$HOME/.tmux.conf" "$REPO/tmux.conf"; then
+    rm -f -- "$HOME/.tmux.conf" && echo "Removed the ~/.tmux.conf link."
+    [ -e "$HOME/.tmux.conf.bak" ] && mv "$HOME/.tmux.conf.bak" "$HOME/.tmux.conf" && echo "Restored your old ~/.tmux.conf from .bak."
+  fi
+  local f
+  for f in "$BIN/tm:$REPO/bin/tm" "$COMP_BASH:$REPO/completions/tm.bash" "$COMP_ZSH:$REPO/completions/_tm" "$COMP_FISH:$REPO/completions/tm.fish"; do
+    links_to "${f%%:*}" "${f#*:}" && rm -f -- "${f%%:*}" && echo "Removed ${f%%:*}"
+  done
+  echo "Kept (delete by hand if you want): plugins in $PLUGINS, saved sessions in $SAVES, and this repo."
+}
+
+cmd_completion() {
+  case ${1:-} in
+    bash) cat "$REPO/completions/tm.bash" ;;
+    zsh) cat "$REPO/completions/_tm" ;;
+    fish) cat "$REPO/completions/tm.fish" ;;
+    *) die "Usage: tm completion bash|zsh|fish" ;;
+  esac
+}
+
+# Hidden helpers for the completions and tests.
+list_commands() {
+  local c
+  for c in "${COMMANDS[@]}"; do
+    if [ "${1:-}" = --describe ]; then echo "${c%%|*}:${c##*|}"; else echo "${c%%|*}"; fi
+  done
+}
+
+CMD=${1:-}
+if [ -z "$CMD" ]; then
+  if [ -t 0 ] && [ -t 1 ] && command -v fzf >/dev/null && command -v tmux >/dev/null && sessions >/dev/null; then cmd_pick; else cmd_help; fi
+  exit
+fi
+shift
+case $CMD in
+  ls) cmd_ls ;;
+  attach) cmd_attach "$@" ;;
+  create) cmd_create "$@" ;;
+  pick) cmd_pick ;;
+  open) cmd_open "$@" ;;
+  detach) cmd_detach "$@" ;;
+  rename) cmd_rename "$@" ;;
+  kill) cmd_kill "$@" ;;
+  clean) cmd_clean ;;
+  kill-all) cmd_kill_all ;;
+  save) cmd_save ;;
+  restore) cmd_restore ;;
+  setup) cmd_setup ;;
+  install) cmd_install ;;
+  conf) cmd_conf ;;
+  link) cmd_link ;;
+  plugins) cmd_plugins ;;
+  boot) cmd_boot ;;
+  update) cmd_update ;;
+  doctor) cmd_doctor ;;
+  uninstall) cmd_uninstall ;;
+  completion) cmd_completion "$@" ;;
+  version|--version) echo "tm $TM_VERSION" ;;
+  help|-h|--help) cmd_help ;;
+  _commands) list_commands "$@" ;;
+  _sessions) sessions ;;
+  _unit) render_unit ;;
+  _after-update) after_update ;;
+  *) die "Unknown command: $CMD. See: tm help" ;;
+esac

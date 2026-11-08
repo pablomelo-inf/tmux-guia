@@ -4,11 +4,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, so CVEs published after the last push still fail the build.
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
 
 jobs:
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history: gitleaks scans every commit, not just the last one.
+          fetch-depth: 0
+      - name: Audit (gitleaks, zizmor, hadolint, trivy), same as "make audit"
+        run: make --no-print-directory audit
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -16,24 +31,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: shellcheck
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck tests/test.sh
-      - name: Makefile parses
-        run: make --no-print-directory help
+      - name: Lint (shellcheck, markdownlint)
+        run: tests/lint.sh
 
   test:
+    # Same containers as "make docker-test": oldest supported tmux (22.04: 3.2a) and current (24.04: 3.4).
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install tmux
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends tmux
-      - name: Tests (including plugin install and pinned commits)
-        run: RUN_NETWORK=1 tests/test.sh
+      - name: Tests in Ubuntu ${{ matrix.ubuntu }} (including plugin install and pinned commits)
+        run: RUN_NETWORK=1 make --no-print-directory docker-test UBUNTU=${{ matrix.ubuntu }}

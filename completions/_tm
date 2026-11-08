@@ -1,0 +1,25 @@
+#compdef tm
+# zsh completion for tm. "tm link" installs it in ~/.local/share/zsh/site-functions (add that to fpath).
+
+_tm() {
+  local -a cmds sessions
+  if (( CURRENT == 2 )); then
+    cmds=(${(f)"$(tm _commands --describe 2>/dev/null)"})
+    _describe 'command' cmds
+    return
+  fi
+  sessions=(${(f)"$(tm _sessions 2>/dev/null)"})
+  case $words[2] in
+    attach|create)
+      if (( CURRENT == 3 )); then compadd -a sessions; else _directories; fi ;;
+    detach|kill|rename)
+      (( CURRENT == 3 )) && compadd -a sessions ;;
+    open)
+      compadd -- --all
+      compadd -a sessions ;;
+    completion)
+      (( CURRENT == 3 )) && compadd bash zsh fish ;;
+  esac
+}
+
+_tm "$@"

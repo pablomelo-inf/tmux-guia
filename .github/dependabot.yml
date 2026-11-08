@@ -4,3 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Wait a week before taking a new release: a compromised one is usually caught and pulled by then.
+    cooldown:
+      default-days: 7
+  # Base image digests in tests/Dockerfile.
+  - package-ecosystem: docker
+    directory: /tests
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

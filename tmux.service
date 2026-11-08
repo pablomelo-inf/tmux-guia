@@ -1,12 +1,18 @@
 # User service: starts tmux at login, and tmux-continuum restores the saved sessions.
 # On stop it saves first; systemd then ends the server. Install with: "tm boot".
+# @TMUX@ is replaced by the path of tmux on this machine when "tm boot" installs the unit.
+# The unnamed session started here is removed by tmux-resurrect once it restores the save.
+#
+# Locale: without a UTF-8 locale tmux prints tabs as "_", and tmux-resurrect (tab-separated)
+# then writes empty saves without any error. The server falls back to C.UTF-8 only when LANG
+# is unset (panes inherit it); the save on stop always runs with C.UTF-8 (only that process).
 [Unit]
 Description=tmux server (sessions restored by tmux-continuum)
 
 [Service]
 Type=forking
-ExecStart=/usr/bin/tmux new-session -d
-ExecStop=%h/.tmux/plugins/tmux-resurrect/scripts/save.sh
+ExecStart=/bin/sh -c 'export LANG="$${LANG:-C.UTF-8}"; exec @TMUX@ new-session -d'
+ExecStop=/usr/bin/env LC_ALL=C.UTF-8 %h/.tmux/plugins/tmux-resurrect/scripts/save.sh
 
 [Install]
 WantedBy=default.target

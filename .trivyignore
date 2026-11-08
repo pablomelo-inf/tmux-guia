@@ -1,0 +1,2 @@
+# Test-only container: it runs the suite once and exits, there is nothing for a HEALTHCHECK to watch.
+DS-0026
