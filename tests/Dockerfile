@@ -2,8 +2,8 @@
 # UBUNTU picks the tmux version: 22.04 has 3.2a (the oldest supported), 24.04 has 3.4.
 # Base images are pinned by digest (a tag can be moved to other content); Dependabot bumps them.
 ARG UBUNTU=24.04
-FROM ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11 AS base-22.04
-FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS base-24.04
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c AS base-22.04
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c AS base-24.04
 # hadolint ignore=DL3006
 FROM base-${UBUNTU}
 
