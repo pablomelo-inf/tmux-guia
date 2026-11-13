@@ -9,3 +9,4 @@ O item 1.4 (sessão `0` extra no boot) não era bug: o resurrect a remove no res
 - Teste de boot com systemd real (container com systemd como PID 1).
 - GIF de demonstração no README.
 - Tags de versão no git.
+- Teste de rede `tm restore` intermitente (cerca de 1 em 8, já existia na 2.0.0): o tmux-continuum só restaura se não houver outro processo tmux, e o laço de espera de `cmd_restore` (`tmux has-session` a cada 0,1 s) pode ser contado como "outro servidor".

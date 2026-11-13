@@ -248,6 +248,82 @@ if command -v git >/dev/null; then
   q "$WORK/clone/bin/tm" update && fail "update: a diverged repo should fail" || ok "update: refuses to merge (fast-forward only)"
 fi
 
+# --- save hook: claude panes get their own conversation, a missing folder is kept ------------
+# A fake "claude" (not exec'd, so ps shows it as the pane's command) logs how it was started and,
+# when $WORK/claude-id exists, writes the per-process file real claude keeps (~/.claude/sessions/PID.json).
+mkdir -p "$WORK/fakebin" "$WORK/saves"
+cat > "$WORK/fakebin/claude" <<EOS
+#!/bin/sh
+if [ -f "$WORK/claude-id" ]; then
+  mkdir -p "\$HOME/.claude/sessions"
+  printf '{"pid":%s,"sessionId":"%s","cwd":"/x"}' \$\$ "\$(cat "$WORK/claude-id")" > "\$HOME/.claude/sessions/\$\$.json"
+fi
+# Logged last: once the line is there, the session file is written too (the tests wait on it).
+echo "args:\$*" >> "$WORK/claude.log"
+sleep 600
+EOS
+chmod +x "$WORK/fakebin/claude"
+tmux kill-server 2>/dev/null
+id_a=aaaaaaaa-1111-2222-3333-444444444444
+echo "$id_a" > "$WORK/claude-id"
+tmux new-session -d -s c1 -c "$WORK"
+tmux send-keys -t =c1: "PATH='$WORK/fakebin':\$PATH claude --continue --model x" Enter
+wait_for "grep -qx 'args:--continue --model x' '$WORK/claude.log' 2>/dev/null" || fail "save hook: fake claude 1 did not start"
+# An ID that is not a plain UUID is never written into the save (it is typed into a shell on restore).
+echo "x; touch $WORK/pwned4" > "$WORK/claude-id"
+tmux new-session -d -s c2 -c "$WORK"
+tmux send-keys -t =c2: "PATH='$WORK/fakebin':\$PATH claude" Enter
+wait_for "grep -qx 'args:' '$WORK/claude.log' 2>/dev/null" || fail "save hook: fake claude 2 did not start"
+wait_for "[ \$(ls '$HOME/.claude/sessions' | wc -l) = 2 ]"
+rm -f "$WORK/claude-id"
+wi() { tmux display -p -t "=$1:" '#{window_index} #{pane_index}'; }
+T=$'\t'
+printf '%s\n' "pane${T}c3${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone\\ dir${T}1${T}bash${T}:" \
+  "pane${T}c4${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone2${T}1${T}bash${T}:" \
+  "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}bash${T}:" > "$WORK/saves/old.txt"
+ln -s old.txt "$WORK/saves/last"
+read -r w1 p1 <<<"$(wi c1)"; read -r w2 p2 <<<"$(wi c2)"
+printf '%s\n' "pane${T}c1${T}${w1}${T}1${T}:*${T}${p1}${T}${T}:$WORK${T}1${T}claude${T}:claude --continue --model x" \
+  "pane${T}c2${T}${w2}${T}1${T}:*${T}${p2}${T}t${T}:$WORK${T}1${T}claude${T}:claude" \
+  "pane${T}c3${T}1${T}1${T}:*${T}1${T}t${T}:$HOME${T}1${T}bash${T}:" \
+  "pane${T}c4${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}bash${T}:" \
+  "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$HOME${T}1${T}bash${T}:" \
+  "pane${T}c6${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}sh${T}:/bin/sh /opt/x/claude -c --resume=old" \
+  "pane${T}c7${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}vim${T}:vim claude" \
+  "window${T}c1${T}1${T}:claude${T}1${T}:*${T}layout${T}:" "state${T}c1${T}" > "$WORK/saves/new.txt"
+cp "$WORK/saves/new.txt" "$WORK/saves/orig.txt"
+q tm _save-hook "$WORK/saves/new.txt"
+line() { grep -P "^pane\t$1\t" "$WORK/saves/new.txt"; }
+[ "$(line c1 | cut -f11)" = ":claude --model x --resume $id_a" ] && ok "save hook: claude saved as --resume ID, other args kept" \
+  || fail "save hook: c1 is '$(line c1 | cut -f11)'"
+[ "$(line c2 | cut -f11)" = ":claude --continue" ] && [ ! -e "$WORK/pwned4" ] \
+  && ok "save hook: an ID that is not a UUID falls back to --continue" || fail "save hook: c2 is '$(line c2 | cut -f11)'"
+[ "$(line c1 | cut -f7)" = "" ] && [ "$(line c1 | awk -F'\t' '{print NF}')" = 11 ] && ok "save hook: empty fields kept" || fail "save hook: fields shifted"
+[ "$(line c3 | cut -f8)" = ":$WORK/gone\\ dir" ] && ok "save hook: a pane that fell back to ~ keeps its missing folder" \
+  || fail "save hook: c3 folder is '$(line c3 | cut -f8)'"
+[ "$(line c4 | cut -f8)" = ":$WORK" ] && ok "save hook: a real change of folder is saved" || fail "save hook: c4 folder is '$(line c4 | cut -f8)'"
+[ "$(line c5 | cut -f8)" = ":$HOME" ] && ok "save hook: moving to ~ is saved when the old folder still exists" \
+  || fail "save hook: c5 folder is '$(line c5 | cut -f8)'"
+[ "$(line c6 | cut -f11)" = ":claude --resume=old" ] && ok "save hook: claude run by an interpreter; a --resume without a known ID is kept" \
+  || fail "save hook: c6 is '$(line c6 | cut -f11)'"
+[ "$(line c7 | cut -f11)" = ":vim claude" ] && ok "save hook: 'vim claude' is not a claude pane" || fail "save hook: c7 is '$(line c7 | cut -f11)'"
+diff <(grep -v '^pane' "$WORK/saves/orig.txt") <(grep -v '^pane' "$WORK/saves/new.txt") >/dev/null \
+  && ok "save hook: window and state lines untouched" || fail "save hook: changed other lines"
+q tm _save-hook "$WORK/saves/missing.txt" && ok "save hook: a missing file is a no-op" || fail "save hook: failed on a missing file"
+tmux kill-server 2>/dev/null
+: > "$WORK/claude.log"; rm -rf "$HOME/.claude"
+
+# --- ls shows the folder, create warns about ~ ------------------------------
+mkdir -p "$WORK/lsdir"
+q tm create lsd "$WORK/lsdir"
+tm ls | grep -q "lsd: 1 window(s), free, $WORK/lsdir$" && ok "ls: shows each session's folder" || fail "ls: $(tm ls)"
+out=$(cd "$HOME" && tm create inhome 2>&1)
+echo "$out" | grep -q "starts in ~" && ok "create without DIR in ~: warns" || fail "create in ~: no warning ($out)"
+tm ls | grep -q "inhome: .*, ~$" && ok "ls: shows ~ for the home folder" || fail "ls: home not shown as ~"
+out=$(cd "$WORK" && tm create elsewhere 2>&1)
+echo "$out" | grep -q "starts in ~" && fail "create outside ~: warned anyway" || ok "create without DIR outside ~: no warning"
+tmux kill-server 2>/dev/null
+
 # --- tmux.conf ---------------------------------------------------------------
 grep -q "^set -g @continuum-boot 'on'" "$REPO/tmux.conf" \
   && ok "tmux.conf sets @continuum-boot on" || fail "tmux.conf lost @continuum-boot on"
@@ -276,16 +352,16 @@ if [ "${RUN_NETWORK:-0}" = 1 ]; then
   out=$(PATH="$WORK/bin:$PATH" tm doctor 2>&1)
   echo "$out" | grep -q "ok    plugins on the pinned commits" && ok "doctor: plugins ok after tm plugins" || fail "doctor after plugins: $out"
 
-  # A fake "claude" (not exec'd, so ps shows it as the pane's command) logs how it was started.
-  mkdir -p "$WORK/fakebin"
-  printf '#!/bin/sh\necho "args:$*" >> "%s/claude.log"\nsleep 600\n' "$WORK" > "$WORK/fakebin/claude"
-  chmod +x "$WORK/fakebin/claude"
+  # The fake "claude" from the save hook tests, without an ID file first: saved and relaunched as --continue.
   # The boot service's own commands, run with no locale at all (as under a systemd without LANG):
   # tmux then prints tabs as "_" and resurrect used to write empty saves. %h and $$ as systemd expands them.
   unit_cmd() { tm _unit | sed -n "s/^$1=//p" | sed "s|%h|$HOME|g; s/\$\$/\$/g"; }
   nolocale() { env -u LANG -u LC_ALL -u LC_CTYPE PATH="$WORK/fakebin:$PATH" "$@"; }
   saved() { grep -qP "^pane\twork\t" "$XDG_DATA_HOME/tmux/resurrect/last" 2>/dev/null; }
-  tmux kill-server 2>/dev/null
+  # continuum skips the restore when any other tmux process is around (it counts them),
+  # so a server that is still exiting would make a restore test flaky: wait for it to be gone.
+  no_tmux() { tmux kill-server 2>/dev/null; wait_for "! pgrep -u $(id -u) '^tmux' >/dev/null"; }
+  no_tmux
   nolocale sh -c "$(unit_cmd ExecStart)"
   tmux rename-session -t =0 work && tmux send-keys -t =work: "cd '$WORK' && claude" Enter
   wait_for "grep -qx 'args:' '$WORK/claude.log' 2>/dev/null" || fail "fake claude did not start"
@@ -299,9 +375,24 @@ if [ "${RUN_NETWORK:-0}" = 1 ]; then
     || fail "claude not relaunched with --continue: $(tr '\n' '|' < "$WORK/claude.log")"
   { tmux has-session -t =work 2>/dev/null && wait_for "! tmux has-session -t =0 2>/dev/null"; } \
     && ok "restore: the boot service's unnamed session is removed" || fail "session 0 left behind"
+  # With the ID file claude keeps per process, the save has "--resume ID" and that is what comes back.
+  id_b=bbbbbbbb-1111-2222-3333-444444444444
+  echo "$id_b" > "$WORK/claude-id"
+  tmux respawn-pane -k -t =work: -c "$WORK"
+  tmux send-keys -t =work: "PATH='$WORK/fakebin':\$PATH claude" Enter
+  wait_for "[ -n \"\$(ls '$HOME/.claude/sessions' 2>/dev/null)\" ]" || fail "fake claude wrote no session file"
+  rm -f "$WORK/claude-id"
+  nolocale sh -c "$(unit_cmd ExecStop)"
+  grep -qP "^pane\twork\t.*\t:claude --resume $id_b$" "$XDG_DATA_HOME/tmux/resurrect/last" \
+    && ok "save (resurrect + hook): claude saved as --resume ID" || fail "save: $(grep -P '^pane' "$XDG_DATA_HOME/tmux/resurrect/last")"
+  no_tmux
+  nolocale sh -c "$(unit_cmd ExecStart)"
+  wait_for "grep -qx 'args:--resume $id_b' '$WORK/claude.log'" && ok "restore: claude relaunched with its own conversation (--resume ID)" \
+    || fail "claude not relaunched with --resume: $(tr '\n' '|' < "$WORK/claude.log")"
+  wait_for "! tmux has-session -t =0 2>/dev/null"
   rm -f "$XDG_DATA_HOME/tmux/resurrect/last"
   nolocale "$REPO/bin/tm" save >/dev/null 2>&1; saved && ok "tm save works without a locale" || fail "tm save wrote an empty save"
-  q tm kill work; nolocale "$REPO/bin/tm" restore >/dev/null 2>&1
+  no_tmux; nolocale "$REPO/bin/tm" restore >/dev/null 2>&1
   wait_for "tmux has-session -t =work 2>/dev/null" && ok "tm restore: brings back a killed session" || fail "tm restore failed"
   tmux kill-server 2>/dev/null
 fi

@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.0.0
+TM_VERSION=2.1.0
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
@@ -83,8 +83,11 @@ cmd_help() {
 
 cmd_ls() {
   need_tmux
-  tmux ls -F '  #{session_name}: #{session_windows} window(s), #{?session_attached,in use,free}' 2>/dev/null \
-    || echo "No sessions running."
+  local out
+  # The folder is the active pane's: a session sitting in ~ is easy to spot.
+  out=$(tmux ls -F '  #{session_name}: #{session_windows} window(s), #{?session_attached,in use,free}, #{pane_current_path}' 2>/dev/null) \
+    || { echo "No sessions running."; return 0; }
+  printf '%s\n' "$out" | sed "s#, $HOME\$#, ~#; s#, $HOME/#, ~/#"
 }
 
 # Creates NAME (in DIR) and prints the name tmux really used: it turns "." and ":" into "_".
@@ -94,6 +97,8 @@ new_session() {
     [ -d "$dir" ] || die "Not a directory: $dir"
     tmux new-session -d -P -F '#{session_name}' -s "$name" -c "$dir"
   else
+    # Sessions left in ~ share it with every other one there (see save_hook).
+    [ "$PWD" != "$HOME" ] || echo "Note: '$name' starts in ~. For a project, give its folder: tm $CMD $name DIR" >&2
     tmux new-session -d -P -F '#{session_name}' -s "$name"
   fi
 }
@@ -444,6 +449,75 @@ cmd_completion() {
   esac
 }
 
+# tmux-resurrect runs this on each new save, before it becomes "last" (@resurrect-hook-post-save-layout in tmux.conf).
+# 1. claude panes are saved as "claude --resume ID": "--continue" reopens the newest conversation of the folder,
+#    so panes sharing a folder (or a claude started there outside tmux) got each other's conversation back.
+#    The ID comes from the file claude keeps per process, ~/.claude/sessions/PID.json.
+# 2. A pane that fell back to ~ because its folder is missing (a disk not mounted yet at boot) keeps the folder
+#    of the previous save, so one bad save does not lose it.
+save_hook() {
+  local file=${1:-} prev line s w p pane_pid pid id dir old key i c had_resume
+  local -A pids=() prev_dirs=()
+  local -a f words rest
+  [ -f "$file" ] || return 0
+  prev=$(dirname "$file")/last
+  local claude_dir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+  # Spaces, not tabs (tmux 3.2 without a UTF-8 locale prints tabs as "_"); the name goes last, it may have spaces.
+  while read -r w p pane_pid s; do pids["$s"$'\t'"$w"$'\t'"$p"]=$pane_pid
+  done < <(tmux list-panes -a -F '#{window_index} #{pane_index} #{pane_pid} #{session_name}' 2>/dev/null)
+  if [ -f "$prev" ] && ! [ "$prev" -ef "$file" ]; then
+    while IFS= read -r line; do
+      mapfile -td $'\t' f < <(printf '%s' "$line")
+      [ "${f[0]:-}" = pane ] && [ ${#f[@]} -ge 11 ] && prev_dirs["${f[1]}"$'\t'"${f[2]}"$'\t'"${f[5]}"]=${f[7]}
+    done < "$prev"
+  fi
+  local tmp=$file.tm
+  while IFS= read -r line; do
+    mapfile -td $'\t' f < <(printf '%s' "$line")
+    if [ "${f[0]:-}" != pane ] || [ ${#f[@]} -lt 11 ]; then printf '%s\n' "$line"; continue; fi
+    key="${f[1]}"$'\t'"${f[2]}"$'\t'"${f[5]}"
+    # Folders are saved as ":DIR" with spaces escaped as "\ ".
+    dir=${f[7]#:}; dir=${dir//\\ / }
+    old=${prev_dirs[$key]:-}
+    if [ "$dir" = "$HOME" ] && [ -n "$old" ] && [ "$old" != "${f[7]}" ]; then
+      old=${old#:}; old=${old//\\ / }
+      [ -d "$old" ] || f[7]=${prev_dirs[$key]}
+    fi
+    # A claude pane: "claude ARGS", "/path/to/claude ARGS" or an interpreter running it ("node /path/claude ARGS").
+    read -ra words <<<"${f[10]#:}"
+    c=-1; w=${words[0]:-}; w=${w##*/}
+    if [ "$w" = claude ]; then c=0
+    else case $w in node|bun|deno|sh|bash) w=${words[1]:-}; [ "${w##*/}" = claude ] && c=1 ;; esac
+    fi
+    if [ $c -ge 0 ]; then
+      id=
+      pane_pid=${pids[$key]:-}
+      # claude is the pane shell's child, or the pane itself when it was started as the pane's command.
+      for pid in ${pane_pid:+$pane_pid $(ps -o pid= --ppid "$pane_pid" 2>/dev/null)}; do
+        [ -f "$claude_dir/sessions/$pid.json" ] || continue
+        id=$(sed -n 's/.*"sessionId" *: *"\([^"]*\)".*/\1/p' "$claude_dir/sessions/$pid.json" 2>/dev/null)
+        break
+      done
+      # The ID is typed into a shell on restore: only a plain UUID passes.
+      [[ $id =~ ^[0-9a-fA-F-]{8,64}$ ]] || id=
+      rest=(); had_resume=0; i=$((c + 1))
+      while [ $i -lt ${#words[@]} ]; do
+        w=${words[$i]}
+        case $w in
+          -c|--continue) ;;
+          -r|--resume) had_resume=1; [ -n "$id" ] || rest+=("$w" "${words[$((i + 1))]:-}"); i=$((i + 1)) ;;
+          --resume=*) had_resume=1; [ -n "$id" ] || rest+=("$w") ;;
+          *) rest+=("$w") ;;
+        esac
+        i=$((i + 1))
+      done
+      if [ -n "$id" ]; then rest+=(--resume "$id"); elif [ $had_resume = 0 ]; then rest+=(--continue); fi
+      f[10]=":claude ${rest[*]}"
+    fi
+    (IFS=$'\t'; printf '%s\n' "${f[*]}")
+  done < "$file" > "$tmp" && mv -f "$tmp" "$file"
+}
+
 # Hidden helpers for the completions and tests.
 list_commands() {
   local c
@@ -487,5 +561,6 @@ case $CMD in
   _sessions) sessions ;;
   _unit) render_unit ;;
   _after-update) after_update ;;
+  _save-hook) save_hook "$@" ;;
   *) die "Unknown command: $CMD. See: tm help" ;;
 esac

@@ -24,7 +24,7 @@ Clone anywhere: `tm` is a link to wherever you cloned. Without an SSH key on Git
 | Command | Does |
 |---|---|
 | `tm` | Pick a session with fzf (or show the help) |
-| `tm ls` | List sessions (in use / free) |
+| `tm ls` | List sessions (in use / free) and their folders |
 | `tm attach NAME [DIR]` | Attach, creating the session (in DIR) if missing; inside tmux it switches |
 | `tm create NAME [DIR]` | Create detached |
 | `tm open [--all] [NAME...]` | One terminal tab per session (default: free ones); `TM_TERMINAL=...` forces a terminal |
@@ -63,7 +63,9 @@ tmux itself dies on shutdown, so this repo saves and rebuilds the environment in
 - **Locale:** without a UTF-8 locale tmux prints tabs as `_` and tmux-resurrect writes empty saves silently. The unit and `tm save`/`tm restore` force `C.UTF-8` for that, and the tests cover it.
 - **SSH drops / last logout:** without lingering, systemd stops your services when your last session ends, which also stops tmux. Run `loginctl enable-linger` once to avoid that (`tm boot` reminds you).
 - `@continuum-boot 'on'` in `tmux.conf` is required: otherwise continuum runs `systemctl --user disable tmux.service` on every start and the service hangs until its 90 s timeout.
-- `claude` panes are relaunched as `claude --continue` (see `@resurrect-processes` in `tmux.conf`). Covered by the tests (a fake `claude` is saved and relaunched).
+- `claude` panes come back with **their own conversation**: on each save, `tm _save-hook` (`@resurrect-hook-post-save-layout`) writes `claude --resume ID`, reading the ID from the file claude keeps per process (`~/.claude/sessions/PID.json`). Plain `--continue` reopened the newest conversation of the folder, so sessions sharing a folder (often `~`) got each other's. Without that file it falls back to `claude --continue`. Covered by the tests.
+- **Folders on other disks:** if a pane's folder is missing at boot (a disk not mounted yet), tmux opens it in `~`; the hook keeps the old folder in the next saves, so it comes back once the disk is there. For the session to open in the right folder at boot, mount that disk in `/etc/fstab` (with `nofail`) instead of from the desktop.
+- **One folder per session:** `tm ls` shows each session's folder, and `tm attach NAME` without a DIR warns when the session would start in `~`.
 - **Not restored:** running processes (`npm run dev`, `docker compose logs`, ...). You get the pane in the right directory; restart the command, or add it to `@resurrect-processes`.
 - **Privacy:** `@resurrect-capture-pane-contents` saves pane text (anything shown on screen, secrets included) in plain text under `~/.local/share/tmux/resurrect`. `tm plugins` makes that folder owner-only (`700`). Remove that line from `tmux.conf` if you don't want it.
 - **Plugins are pinned** to audited commits in `bin/tm` (they run code on every tmux start). To update: review the diff upstream, then change the `*_SHA` lines in `bin/tm`.
@@ -109,7 +111,7 @@ make test         # offline tests, in a throwaway HOME and tmux socket
 make docker-test  # same suite in clean Ubuntu 22.04 (tmux 3.2a) and 24.04 (3.4) containers
 make lint         # shellcheck, markdownlint, systemd unit
 make audit        # security checks (needs Docker)
-RUN_NETWORK=1 make test   # also installs plugins, checks pins, save/restore and claude --continue
+RUN_NETWORK=1 make test   # also installs plugins, checks pins, save/restore and claude --resume
 ```
 
 The suite is also the regression suite: every fixed bug keeps a test that fails on the old code. Containers mount the repo read-only and run as non-root.
