@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.1.1
+TM_VERSION=2.1.2
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.

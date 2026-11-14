@@ -428,6 +428,16 @@ if [ "${RUN_NETWORK:-0}" = 1 ]; then
   nolocale "$REPO/bin/tm" save >/dev/null 2>&1; saved && ok "tm save works without a locale" || fail "tm save wrote an empty save"
   no_tmux; nolocale "$REPO/bin/tm" restore >/dev/null 2>&1
   wait_for "tmux has-session -t =work 2>/dev/null" && ok "tm restore: brings back a killed session" || fail "tm restore failed"
+  # systemd runs ExecStop also when the server dies by itself (crash, OOM, kill-server). Saving then wrote an
+  # empty file and moved "last" to it, so the next boot restored nothing. With no server it must not save.
+  good_last=$(readlink "$XDG_DATA_HOME/tmux/resurrect/last")
+  no_tmux
+  sleep 1  # saves are named by the second: a save now must not land on the name of the last one
+  nolocale sh -c "$(unit_cmd ExecStop)"
+  [ "$(readlink "$XDG_DATA_HOME/tmux/resurrect/last")" = "$good_last" ] && saved \
+    && [ -z "$(find "$XDG_DATA_HOME/tmux/resurrect" -maxdepth 1 -name 'tmux_resurrect_*.txt' -empty)" ] \
+    && ok "boot service stop with no server: no empty save, last kept" \
+    || fail "ExecStop with no server: last -> $(readlink "$XDG_DATA_HOME/tmux/resurrect/last") (was $good_last)"
   tmux kill-server 2>/dev/null
 fi
 

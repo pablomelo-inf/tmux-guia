@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.2
+
+- Fixed: when the tmux server died by itself (crash, OOM, `tmux kill-server`), systemd ran the boot service's stop save with no server; tmux-resurrect wrote an empty save and pointed `last` at it, so the next boot restored nothing. The save now runs only while a server is up. Run `tm boot` (or `tm update`) to install the new unit.
+
 ## 2.1.1
 
 - Fixed: a pane with an empty title (claude leaves it so at times) came back in `~` with a bare shell after a reboot. tmux-resurrect reads its save with `IFS=tab`, bash merges runs of tabs, and the empty field shifted the rest of the line (folder saved as `1`, command lost). The save hook puts the fields back, gets the command from the pane's PID and gives the pane a title, since the restore reads the file the same way.

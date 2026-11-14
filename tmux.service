@@ -6,13 +6,17 @@
 # Locale: without a UTF-8 locale tmux prints tabs as "_", and tmux-resurrect (tab-separated)
 # then writes empty saves without any error. The server falls back to C.UTF-8 only when LANG
 # is unset (panes inherit it); the save on stop always runs with C.UTF-8 (only that process).
+#
+# systemd runs ExecStop also when the server dies by itself (crash, OOM, kill-server). With no server
+# tmux-resurrect writes an empty save and points "last" at it, so the next boot would restore nothing:
+# the save runs only while a server is up, and "last" stays on the previous good save.
 [Unit]
 Description=tmux server (sessions restored by tmux-continuum)
 
 [Service]
 Type=forking
 ExecStart=/bin/sh -c 'export LANG="$${LANG:-C.UTF-8}"; exec @TMUX@ new-session -d'
-ExecStop=/usr/bin/env LC_ALL=C.UTF-8 %h/.tmux/plugins/tmux-resurrect/scripts/save.sh
+ExecStop=/bin/sh -c '@TMUX@ has-session 2>/dev/null || exit 0; exec env LC_ALL=C.UTF-8 %h/.tmux/plugins/tmux-resurrect/scripts/save.sh'
 
 [Install]
 WantedBy=default.target
