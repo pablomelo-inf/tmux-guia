@@ -276,13 +276,21 @@ tmux send-keys -t =c2: "PATH='$WORK/fakebin':\$PATH claude" Enter
 wait_for "grep -qx 'args:' '$WORK/claude.log' 2>/dev/null" || fail "save hook: fake claude 2 did not start"
 wait_for "[ \$(ls '$HOME/.claude/sessions' | wc -l) = 2 ]"
 rm -f "$WORK/claude-id"
+# c8: resurrect reads its fields with IFS=tab, and bash merges runs of tabs: an empty pane title
+# shifts every later field one place left (folder "1", command the pane's PID, full command empty).
+id_c=cccccccc-1111-2222-3333-444444444444
+echo "$id_c" > "$WORK/claude-id"
+tmux new-session -d -s c8 -c "$WORK"
+tmux send-keys -t =c8: "PATH='$WORK/fakebin':\$PATH claude --model y" Enter
+wait_for "grep -qx 'args:--model y' '$WORK/claude.log' 2>/dev/null" || fail "save hook: fake claude 8 did not start"
+rm -f "$WORK/claude-id"
 wi() { tmux display -p -t "=$1:" '#{window_index} #{pane_index}'; }
 T=$'\t'
 printf '%s\n' "pane${T}c3${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone\\ dir${T}1${T}bash${T}:" \
   "pane${T}c4${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone2${T}1${T}bash${T}:" \
   "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}bash${T}:" > "$WORK/saves/old.txt"
 ln -s old.txt "$WORK/saves/last"
-read -r w1 p1 <<<"$(wi c1)"; read -r w2 p2 <<<"$(wi c2)"
+read -r w1 p1 <<<"$(wi c1)"; read -r w2 p2 <<<"$(wi c2)"; read -r w8 p8 <<<"$(wi c8)"
 printf '%s\n' "pane${T}c1${T}${w1}${T}1${T}:*${T}${p1}${T}${T}:$WORK${T}1${T}claude${T}:claude --continue --model x" \
   "pane${T}c2${T}${w2}${T}1${T}:*${T}${p2}${T}t${T}:$WORK${T}1${T}claude${T}:claude" \
   "pane${T}c3${T}1${T}1${T}:*${T}1${T}t${T}:$HOME${T}1${T}bash${T}:" \
@@ -290,6 +298,7 @@ printf '%s\n' "pane${T}c1${T}${w1}${T}1${T}:*${T}${p1}${T}${T}:$WORK${T}1${T}cla
   "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$HOME${T}1${T}bash${T}:" \
   "pane${T}c6${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}sh${T}:/bin/sh /opt/x/claude -c --resume=old" \
   "pane${T}c7${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}vim${T}:vim claude" \
+  "pane${T}c8${T}${w8}${T}1${T}:*${T}${p8}${T}:$WORK${T}1${T}claude${T}$(tmux display -p -t =c8: '#{pane_pid}')${T}:" \
   "window${T}c1${T}1${T}:claude${T}1${T}:*${T}layout${T}:" "state${T}c1${T}" > "$WORK/saves/new.txt"
 cp "$WORK/saves/new.txt" "$WORK/saves/orig.txt"
 q tm _save-hook "$WORK/saves/new.txt"
@@ -298,7 +307,14 @@ line() { grep -P "^pane\t$1\t" "$WORK/saves/new.txt"; }
   || fail "save hook: c1 is '$(line c1 | cut -f11)'"
 [ "$(line c2 | cut -f11)" = ":claude --continue" ] && [ ! -e "$WORK/pwned4" ] \
   && ok "save hook: an ID that is not a UUID falls back to --continue" || fail "save hook: c2 is '$(line c2 | cut -f11)'"
-[ "$(line c1 | cut -f7)" = "" ] && [ "$(line c1 | awk -F'\t' '{print NF}')" = 11 ] && ok "save hook: empty fields kept" || fail "save hook: fields shifted"
+# restore.sh reads the save the same way, so an empty title would shift the line there: it gets one.
+[ -n "$(line c1 | cut -f7)" ] && [ "$(line c1 | cut -f8)" = ":$WORK" ] && [ "$(line c1 | awk -F'\t' '{print NF}')" = 11 ] \
+  && ok "save hook: an empty pane title is filled in, fields in place" || fail "save hook: c1 is '$(line c1)'"
+[ "$(line c8 | awk -F'\t' '{print NF}')" = 11 ] && [ -n "$(line c8 | cut -f7)" ] && [ "$(line c8 | cut -f8)" = ":$WORK" ] \
+  && [ "$(line c8 | cut -f9)" = 1 ] && [ "$(line c8 | cut -f10)" = claude ] \
+  && ok "save hook: a line shifted by an empty pane title is put back in place" || fail "save hook: c8 is '$(line c8)'"
+[ "$(line c8 | cut -f11)" = ":claude --model y --resume $id_c" ] \
+  && ok "save hook: the shifted line's command comes back from its PID (claude --resume ID)" || fail "save hook: c8 command is '$(line c8 | cut -f11)'"
 [ "$(line c3 | cut -f8)" = ":$WORK/gone\\ dir" ] && ok "save hook: a pane that fell back to ~ keeps its missing folder" \
   || fail "save hook: c3 folder is '$(line c3 | cut -f8)'"
 [ "$(line c4 | cut -f8)" = ":$WORK" ] && ok "save hook: a real change of folder is saved" || fail "save hook: c4 folder is '$(line c4 | cut -f8)'"
@@ -389,6 +405,24 @@ if [ "${RUN_NETWORK:-0}" = 1 ]; then
   nolocale sh -c "$(unit_cmd ExecStart)"
   wait_for "grep -qx 'args:--resume $id_b' '$WORK/claude.log'" && ok "restore: claude relaunched with its own conversation (--resume ID)" \
     || fail "claude not relaunched with --resume: $(tr '\n' '|' < "$WORK/claude.log")"
+  wait_for "! tmux has-session -t =0 2>/dev/null"
+  # A pane with an empty title (claude leaves it so at times): resurrect shifted its line and the
+  # restore opened it in ~ with a bare shell. It must come back in its folder, with claude.
+  mkdir -p "$WORK/notitle"
+  tmux respawn-pane -k -t =work: -c "$WORK/notitle"
+  tmux select-pane -t =work: -T ''
+  : > "$WORK/claude.log"
+  tmux send-keys -t =work: "PATH='$WORK/fakebin':\$PATH claude" Enter
+  wait_for "grep -qx 'args:' '$WORK/claude.log'" || fail "fake claude (empty title) did not start"
+  : > "$WORK/claude.log"
+  nolocale sh -c "$(unit_cmd ExecStop)"
+  no_tmux
+  nolocale sh -c "$(unit_cmd ExecStart)"
+  wait_for "[ \"\$(tmux display -p -t =work: '#{pane_current_path}' 2>/dev/null)\" = '$WORK/notitle' ]" \
+    && ok "restore: a pane with an empty title comes back in its folder" \
+    || fail "empty title: restored in '$(tmux display -p -t =work: '#{pane_current_path}' 2>/dev/null)'; save: $(grep -P '^pane' "$XDG_DATA_HOME/tmux/resurrect/last")"
+  wait_for "grep -qx 'args:--continue' '$WORK/claude.log'" && ok "restore: a pane with an empty title gets claude back" \
+    || fail "empty title: claude not relaunched: $(tr '\n' '|' < "$WORK/claude.log")"
   wait_for "! tmux has-session -t =0 2>/dev/null"
   rm -f "$XDG_DATA_HOME/tmux/resurrect/last"
   nolocale "$REPO/bin/tm" save >/dev/null 2>&1; saved && ok "tm save works without a locale" || fail "tm save wrote an empty save"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.1
+
+- Fixed: a pane with an empty title (claude leaves it so at times) came back in `~` with a bare shell after a reboot. tmux-resurrect reads its save with `IFS=tab`, bash merges runs of tabs, and the empty field shifted the rest of the line (folder saved as `1`, command lost). The save hook puts the fields back, gets the command from the pane's PID and gives the pane a title, since the restore reads the file the same way.
+
 ## 2.1.0
 
 - Fixed: after a reboot, `claude` panes could open another session's conversation (`--continue` picks the newest one in the folder, the same for every session in it, often `~`). Each save now records `claude --resume ID` per pane (`tm _save-hook`, a tmux-resurrect hook).

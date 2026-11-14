@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.1.0
+TM_VERSION=2.1.1
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
@@ -475,6 +475,14 @@ save_hook() {
   while IFS= read -r line; do
     mapfile -td $'\t' f < <(printf '%s' "$line")
     if [ "${f[0]:-}" != pane ] || [ ${#f[@]} -lt 11 ]; then printf '%s\n' "$line"; continue; fi
+    # resurrect reads its fields with IFS=tab and bash merges runs of tabs, so an empty pane title shifts
+    # the rest one place left: title ":DIR", folder "1", command the pane's PID, full command lost.
+    # Put them back and get the command from the PID the way resurrect does (the pane's child process).
+    if [[ ${f[6]} == :* && ${f[7]} =~ ^[01]$ && ${f[9]} =~ ^[0-9]+$ ]]; then
+      f=("${f[@]:0:6}" "" "${f[6]}" "${f[7]}" "${f[8]}" ":$(ps -o args= --ppid "${f[9]}" 2>/dev/null | head -n 1)")
+    fi
+    # restore.sh reads the save the same way: an empty title would shift the line there too.
+    [ -n "${f[6]}" ] || f[6]=${f[9]:-pane}
     key="${f[1]}"$'\t'"${f[2]}"$'\t'"${f[5]}"
     # Folders are saved as ":DIR" with spaces escaped as "\ ".
     dir=${f[7]#:}; dir=${dir//\\ / }
