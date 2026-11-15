@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.1.2
+TM_VERSION=2.1.3
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
@@ -455,9 +455,11 @@ cmd_completion() {
 #    The ID comes from the file claude keeps per process, ~/.claude/sessions/PID.json.
 # 2. A pane that fell back to ~ because its folder is missing (a disk not mounted yet at boot) keeps the folder
 #    of the previous save, so one bad save does not lose it.
+# 3. A claude that died before the save (shutdown kills it first; ps shows "[claude] <defunct>") is still a
+#    claude pane: it gets the previous save's command back, or a plain claude.
 save_hook() {
   local file=${1:-} prev line s w p pane_pid pid id dir old key i c had_resume
-  local -A pids=() prev_dirs=()
+  local -A pids=() prev_dirs=() prev_cmds=()
   local -a f words rest
   [ -f "$file" ] || return 0
   prev=$(dirname "$file")/last
@@ -468,7 +470,9 @@ save_hook() {
   if [ -f "$prev" ] && ! [ "$prev" -ef "$file" ]; then
     while IFS= read -r line; do
       mapfile -td $'\t' f < <(printf '%s' "$line")
-      [ "${f[0]:-}" = pane ] && [ ${#f[@]} -ge 11 ] && prev_dirs["${f[1]}"$'\t'"${f[2]}"$'\t'"${f[5]}"]=${f[7]}
+      [ "${f[0]:-}" = pane ] && [ ${#f[@]} -ge 11 ] || continue
+      key="${f[1]}"$'\t'"${f[2]}"$'\t'"${f[5]}"
+      prev_dirs[$key]=${f[7]}; prev_cmds[$key]=${f[10]}
     done < "$prev"
   fi
   local tmp=$file.tm
@@ -490,6 +494,10 @@ save_hook() {
     if [ "$dir" = "$HOME" ] && [ -n "$old" ] && [ "$old" != "${f[7]}" ]; then
       old=${old#:}; old=${old//\\ / }
       [ -d "$old" ] || f[7]=${prev_dirs[$key]}
+    fi
+    if [ "${f[10]}" = ":[claude] <defunct>" ]; then
+      old=${prev_cmds[$key]:-}
+      if [[ $old == ":claude" || $old == ":claude "* ]]; then f[10]=$old; else f[10]=":claude"; fi
     fi
     # A claude pane: "claude ARGS", "/path/to/claude ARGS" or an interpreter running it ("node /path/claude ARGS").
     read -ra words <<<"${f[10]#:}"

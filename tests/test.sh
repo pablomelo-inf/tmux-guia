@@ -288,7 +288,9 @@ wi() { tmux display -p -t "=$1:" '#{window_index} #{pane_index}'; }
 T=$'\t'
 printf '%s\n' "pane${T}c3${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone\\ dir${T}1${T}bash${T}:" \
   "pane${T}c4${T}1${T}1${T}:*${T}1${T}t${T}:$WORK/gone2${T}1${T}bash${T}:" \
-  "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}bash${T}:" > "$WORK/saves/old.txt"
+  "pane${T}c5${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}bash${T}:" \
+  "pane${T}c9${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}claude${T}:claude --model z --resume $id_c" \
+  "pane${T}c11${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}vim${T}:vim notes" > "$WORK/saves/old.txt"
 ln -s old.txt "$WORK/saves/last"
 read -r w1 p1 <<<"$(wi c1)"; read -r w2 p2 <<<"$(wi c2)"; read -r w8 p8 <<<"$(wi c8)"
 printf '%s\n' "pane${T}c1${T}${w1}${T}1${T}:*${T}${p1}${T}${T}:$WORK${T}1${T}claude${T}:claude --continue --model x" \
@@ -299,6 +301,9 @@ printf '%s\n' "pane${T}c1${T}${w1}${T}1${T}:*${T}${p1}${T}${T}:$WORK${T}1${T}cla
   "pane${T}c6${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}sh${T}:/bin/sh /opt/x/claude -c --resume=old" \
   "pane${T}c7${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}vim${T}:vim claude" \
   "pane${T}c8${T}${w8}${T}1${T}:*${T}${p8}${T}:$WORK${T}1${T}claude${T}$(tmux display -p -t =c8: '#{pane_pid}')${T}:" \
+  "pane${T}c9${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}claude${T}:[claude] <defunct>" \
+  "pane${T}c10${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}claude${T}:[claude] <defunct>" \
+  "pane${T}c11${T}1${T}1${T}:*${T}1${T}t${T}:$WORK${T}1${T}vim${T}:[vim] <defunct>" \
   "window${T}c1${T}1${T}:claude${T}1${T}:*${T}layout${T}:" "state${T}c1${T}" > "$WORK/saves/new.txt"
 cp "$WORK/saves/new.txt" "$WORK/saves/orig.txt"
 q tm _save-hook "$WORK/saves/new.txt"
@@ -323,6 +328,14 @@ line() { grep -P "^pane\t$1\t" "$WORK/saves/new.txt"; }
 [ "$(line c6 | cut -f11)" = ":claude --resume=old" ] && ok "save hook: claude run by an interpreter; a --resume without a known ID is kept" \
   || fail "save hook: c6 is '$(line c6 | cut -f11)'"
 [ "$(line c7 | cut -f11)" = ":vim claude" ] && ok "save hook: 'vim claude' is not a claude pane" || fail "save hook: c7 is '$(line c7 | cut -f11)'"
+# On shutdown claude can die before the save: ps shows it as "[claude] <defunct>" and the pane came back
+# as a bare shell. It is still a claude pane; the previous save has its command (and its conversation).
+[ "$(line c9 | cut -f11)" = ":claude --model z --resume $id_c" ] \
+  && ok "save hook: a claude that died before the save keeps the previous save's command" || fail "save hook: c9 is '$(line c9 | cut -f11)'"
+[ "$(line c10 | cut -f11)" = ":claude --continue" ] \
+  && ok "save hook: a dead claude with no previous save comes back as claude --continue" || fail "save hook: c10 is '$(line c10 | cut -f11)'"
+[ "$(line c11 | cut -f11)" = ":[vim] <defunct>" ] \
+  && ok "save hook: a dead process that is not claude is left alone" || fail "save hook: c11 is '$(line c11 | cut -f11)'"
 diff <(grep -v '^pane' "$WORK/saves/orig.txt") <(grep -v '^pane' "$WORK/saves/new.txt") >/dev/null \
   && ok "save hook: window and state lines untouched" || fail "save hook: changed other lines"
 q tm _save-hook "$WORK/saves/missing.txt" && ok "save hook: a missing file is a no-op" || fail "save hook: failed on a missing file"
