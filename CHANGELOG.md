@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.4
+
+- Fixed: `tm restore` with no server at times restored nothing. tmux-continuum skips its restore when it counts another tmux process at the server start, and the `tmux` commands `tm restore` ran while waiting for it were that process. It now waits without running tmux, and restores by itself if continuum skipped.
+
 ## 2.1.3
 
 - Fixed: a claude pane came back as a bare shell after a reboot when claude died before the shutdown save. tmux-resurrect saved its command as `[claude] <defunct>`, which the save hook did not take for claude. The hook now gives such a pane the previous save's command (with its `--resume ID`), or `claude --continue` when there is none.

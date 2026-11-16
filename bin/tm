@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.1.3
+TM_VERSION=2.1.4
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
@@ -249,15 +249,18 @@ cmd_restore() {
   if ! tmux has-session 2>/dev/null; then
     # Started like the boot service: panes inherit LANG, so C.UTF-8 only when it is unset.
     LANG="${LANG:-C.UTF-8}" tmux new-session -d || exit 1
-    if [ "$(tmux show -gv @continuum-restore 2>/dev/null)" = on ] && [ -d "$PLUGINS/tmux-continuum" ]; then
-      # continuum restores a new server by itself; restoring again would race it. Wait instead:
-      # resurrect drops the starting session "0" when it is done (and the server exits if nothing was saved).
-      local _
-      for _ in $(seq 150); do tmux has-session -t =0 2>/dev/null || break; sleep 0.1; done
-      tmux has-session 2>/dev/null || die "Nothing to restore (no save yet?)."
-      echo "Restored. See: tm ls"
-      return 0
-    fi
+    # continuum restores a new server by itself; restoring again would race it, so wait for it.
+    # No tmux command until it is done: it skips the restore, silently, when it counts more than one
+    # other tmux process right after the start, and a "tmux show" or "has-session" here was that one.
+    local _
+    for _ in $(seq 300); do
+      pgrep -u "$(id -u)" -f 'tmux-continuum/scripts/continuum_restore\.sh' >/dev/null || break
+      sleep 0.1
+    done
+    # resurrect drops the starting session "0" when it is done (and the server exits if nothing was saved).
+    tmux has-session 2>/dev/null || die "Nothing to restore (no save yet?)."
+    if ! tmux has-session -t =0 2>/dev/null; then echo "Restored. See: tm ls"; return 0; fi
+    # Session "0" still there: continuum is off or skipped the restore. Restore it here.
   fi
   LC_ALL=C.UTF-8 "$RESURRECT/scripts/restore.sh" && echo "Restored. See: tm ls"
 }
