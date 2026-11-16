@@ -441,6 +441,15 @@ if [ "${RUN_NETWORK:-0}" = 1 ]; then
   nolocale "$REPO/bin/tm" save >/dev/null 2>&1; saved && ok "tm save works without a locale" || fail "tm save wrote an empty save"
   no_tmux; nolocale "$REPO/bin/tm" restore >/dev/null 2>&1
   wait_for "tmux has-session -t =work 2>/dev/null" && ok "tm restore: brings back a killed session" || fail "tm restore failed"
+  # tm restore keeps continuum out with its halt file (both restoring at once killed the server): gone after.
+  [ ! -e "$HOME/tmux_no_auto_restore" ] && ok "tm restore: removes continuum's halt file" || fail "tm restore left ~/tmux_no_auto_restore"
+  { tmux has-session -t =work 2>/dev/null && wait_for "! tmux has-session -t =0 2>/dev/null"; } \
+    && ok "tm restore: the starting session is removed" || fail "tm restore: session 0 left behind"
+  echo mine > "$HOME/tmux_no_auto_restore"
+  no_tmux; nolocale "$REPO/bin/tm" restore >/dev/null 2>&1
+  { wait_for "tmux has-session -t =work 2>/dev/null" && [ "$(cat "$HOME/tmux_no_auto_restore")" = mine ]; } \
+    && ok "tm restore: a halt file the user made stays" || fail "tm restore: user's halt file removed or restore failed"
+  rm -f "$HOME/tmux_no_auto_restore"
   # systemd runs ExecStop also when the server dies by itself (crash, OOM, kill-server). Saving then wrote an
   # empty file and moved "last" to it, so the next boot restored nothing. With no server it must not save.
   good_last=$(readlink "$XDG_DATA_HOME/tmux/resurrect/last")

@@ -6,7 +6,7 @@
 # shellcheck disable=SC2015,SC2088 # SC2088: "~" appears only in messages shown to the user
 set -uo pipefail
 
-TM_VERSION=2.1.4
+TM_VERSION=2.1.5
 REPO=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 
 # Audited plugin commits (they run code on every tmux start). To update: review the upstream diff, then change them here.
@@ -247,22 +247,24 @@ cmd_save() {
 cmd_restore() {
   need_tmux; need_resurrect
   if ! tmux has-session 2>/dev/null; then
+    [ -e "$SAVES/last" ] || die "Nothing to restore (no save yet?)."
+    # continuum restores a new server by itself, but it cannot be waited for: its restore script starts
+    # some time after "new-session" returns, and at times skips the restore when it counts tmux
+    # processes. So tm restores here and keeps continuum out with its halt file, until tm exits.
+    # A halt file the user put there stays.
+    local halt=$HOME/tmux_no_auto_restore
+    if [ ! -e "$halt" ] && [ ! -L "$halt" ] && : > "$halt"; then
+      # shellcheck disable=SC2064 # expanded now: $halt is local
+      trap "rm -f -- $(printf %q "$halt")" EXIT
+    fi
     # Started like the boot service: panes inherit LANG, so C.UTF-8 only when it is unset.
     LANG="${LANG:-C.UTF-8}" tmux new-session -d || exit 1
-    # continuum restores a new server by itself; restoring again would race it, so wait for it.
-    # No tmux command until it is done: it skips the restore, silently, when it counts more than one
-    # other tmux process right after the start, and a "tmux show" or "has-session" here was that one.
-    local _
-    for _ in $(seq 300); do
-      pgrep -u "$(id -u)" -f 'tmux-continuum/scripts/continuum_restore\.sh' >/dev/null || break
-      sleep 0.1
-    done
-    # resurrect drops the starting session "0" when it is done (and the server exits if nothing was saved).
-    tmux has-session 2>/dev/null || die "Nothing to restore (no save yet?)."
-    if ! tmux has-session -t =0 2>/dev/null; then echo "Restored. See: tm ls"; return 0; fi
-    # Session "0" still there: continuum is off or skipped the restore. Restore it here.
   fi
-  LC_ALL=C.UTF-8 "$RESURRECT/scripts/restore.sh" && echo "Restored. See: tm ls"
+  # resurrect makes sessions with "tmux -S <socket from $TMUX>": run outside tmux, it made them on socket ''
+  # and then killed session "0" of this server, which died with no session left. Give it this server's.
+  local socket
+  socket=$(tmux display -p '#{socket_path},#{pid},0') || exit 1
+  TMUX=$socket LC_ALL=C.UTF-8 "$RESURRECT/scripts/restore.sh" && echo "Restored. See: tm ls"
 }
 
 cmd_install() {

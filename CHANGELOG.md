@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.5
+
+- Fixed: `tm restore` with no server still failed at times (seen in CI on Ubuntu 24.04). continuum's restore script starts some time after the server, so the 2.1.4 wait could miss it and both restored at once. `tm restore` now keeps continuum out with its halt file (`~/tmux_no_auto_restore`, removed when `tm` exits; one the user made stays) and restores by itself.
+- Fixed: `tm restore` run outside tmux killed the server. tmux-resurrect takes the socket from `$TMUX`; with it unset it made the sessions on another socket and then killed the starting session, the last one on the server. `tm` now passes the server's socket.
+
 ## 2.1.4
 
 - Fixed: `tm restore` with no server at times restored nothing. tmux-continuum skips its restore when it counts another tmux process at the server start, and the `tmux` commands `tm restore` ran while waiting for it were that process. It now waits without running tmux, and restores by itself if continuum skipped.
